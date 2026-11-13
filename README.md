@@ -305,9 +305,11 @@ especificaciones públicas, está en
 ## Uso
 
 1. Arrastra canciones o carpetas al panel central.
-2. Pulsa **«Analizar biblioteca»** en la barra izquierda. La app decodifica
-   cada pista con FFmpeg en un hilo de trabajo y guarda BPM, tonalidad,
-   beat grid y waveform en SQLite. Hay barra de progreso y estado.
+2. En cuanto importas pistas nuevas, el contador **«N pistas pendientes»** se
+   actualiza al instante y se habilita **«Analizar biblioteca»** (barra
+   izquierda). La app decodifica cada pista con FFmpeg en un hilo de trabajo y
+   guarda BPM, tonalidad, beat grid y waveform en SQLite, con progreso y estado.
+   También puedes analizar desde el propio diálogo de exportación.
 3. En el panel derecho crea una lista (queda seleccionada sola) y añade pistas
    con el botón `+` de cada fila. El botón **«Cues»** de cada pista abre el
    editor de hot cues, memory cues y loops (posición, duración del loop,
@@ -319,9 +321,11 @@ especificaciones públicas, está en
 5. La copia del audio (que puede ser de varios GB a un pendrive FAT32) se hace
    **en segundo plano**: la ventana sigue respondiendo, muestra el progreso
    pista a pista y permite cancelar. Al terminar se valida lo escrito.
-6. En el diálogo puedes activar/desactivar **Device Library Plus** y la
-   **exportación incremental**. «Otra carpeta…» permite exportar a cualquier
-   directorio, por ejemplo para probar sin hardware.
+6. En el diálogo, si quedan pistas sin analizar, aparece un aviso con
+   **«Analizar ahora»** y, en cada dispositivo, **«Analizar + exportar»**:
+   analiza en segundo plano y exporta automáticamente al terminar. También
+   puedes activar/desactivar **Device Library Plus** y la **exportación
+   incremental**. «Otra carpeta…» permite exportar a cualquier directorio.
 
 > Para probar en un CDJ real: formatea el USB en **FAT32/MBR**
 > (`mkfs.fat -F 32 -S 512`) y selecciónalo en el diálogo.

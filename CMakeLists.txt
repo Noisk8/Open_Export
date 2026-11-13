@@ -177,6 +177,12 @@ if(BUILD_TESTING)
     )
     target_link_libraries(open-deck-tests-conversion PRIVATE ode_core Qt6::Test)
     add_test(NAME unit-conversion COMMAND open-deck-tests-conversion)
+
+    qt_add_executable(open-deck-tests-analysis-flow
+        tests/unit/test_analysis_flow.cpp
+    )
+    target_link_libraries(open-deck-tests-analysis-flow PRIVATE ode_core Qt6::Test)
+    add_test(NAME unit-analysis-flow COMMAND open-deck-tests-analysis-flow)
 endif()
 
 # ---- Packaging (Fase 7) -----------------------------------------------------

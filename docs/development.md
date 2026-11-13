@@ -126,3 +126,25 @@ directorio del ejecutable al import path de QML y `loadFromModule()` necesita
 ese `qmldir`. Sin esta regla, el binario **instalado** (y los paquetes
 TGZ/DEB) fallan al arrancar aunque el QML esté en el `qrc`. Compruébalo siempre
 ejecutando el binario instalado desde un directorio distinto de `build/`.
+
+
+## Flujo importar → analizar → exportar
+
+`AnalysisController::bindToLibrary(LibraryController&)` suscribe el controlador
+a `importFinished` y `trackCountChanged`: las pistas importadas **después** de
+arrancar la aplicación pasan a contarse como pendientes de inmediato. Sin este
+cableado, `pendingCount` quedaba congelado en el valor del arranque y el botón
+«Analizar biblioteca» (y el aviso del diálogo de exportación) nunca se
+activaban. `tests/unit/test_analysis_flow.cpp` reproduce el fallo y comprueba
+que tras analizar el modelo de la biblioteca muestra BPM y estado actualizados.
+
+Para probar la interfaz sin tocar la biblioteca real:
+
+```sh
+ODE_LIBRARY_DB=/tmp/ode-test/library.db ./build/open-deck-export
+```
+
+`ODE_LIBRARY_DB` sobreescribe la ruta de `library.db` (por defecto en
+`QStandardPaths::AppDataLocation`). El diálogo ofrece además
+«Analizar + exportar», que encadena `analysis.analyzeAll()` con
+`exporter.exportTo()` mediante la señal `AnalysisController::finished`.

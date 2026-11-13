@@ -61,11 +61,34 @@ ApplicationWindow {
         exporter.exportTo(destination)
     }
 
+    // Fase 2/7: the export dialog can analyse first and export automatically
+    // once the analysis finishes, so the user never has to guess the order.
+    property string pendingExportPath: ""
+    property bool waitingForAnalysis: false
+
+    function analyzeAndExport(destination) {
+        window.pendingExportPath = destination
+        window.waitingForAnalysis = true
+        devicePopup.close()
+        analysis.analyzeAll()
+    }
+
     Connections {
         target: exporter
         function onFinished(ok, message) {
             window.setStatus(message, ok)
             devices.refresh()
+        }
+    }
+
+    Connections {
+        target: analysis
+        function onFinished() {
+            if (window.waitingForAnalysis) {
+                window.waitingForAnalysis = false
+                window.setStatus("Análisis terminado, exportando…", true)
+                exporter.exportTo(window.pendingExportPath)
+            }
         }
     }
 
@@ -130,7 +153,7 @@ ApplicationWindow {
                     spacing: 4
                     Text {
                         Layout.fillWidth: true
-                        text: analysis.pendingCount + " pistas sin analizar: el beat grid, la tonalidad y la waveform saldrán vacíos."
+                        text: analysis.pendingCount + " pistas sin analizar: el beat grid, la tonalidad y la waveform saldrán vacíos. Pulsa «Analizar ahora» o usa «Analizar y exportar» en el dispositivo."
                         color: window.warning
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
@@ -217,14 +240,26 @@ ApplicationWindow {
                                 font.pixelSize: 11
                             }
                         }
-                        OdeButton {
-                            Layout.preferredWidth: 132
-                            Layout.preferredHeight: 34
+                        RowLayout {
+                            spacing: 6
                             Layout.alignment: Qt.AlignVCenter
-                            text: "Exportar aquí"
-                            primary: true
-                            enabled: model.writable
-                            onClicked: window.doExport(model.rootPath)
+                            OdeButton {
+                                Layout.preferredWidth: 150
+                                Layout.preferredHeight: 32
+                                visible: analysis.pendingCount > 0 && !analysis.running
+                                enabled: model.writable && analysis.ffmpegAvailable
+                                text: "Analizar + exportar"
+                                onClicked: window.analyzeAndExport(model.rootPath)
+                            }
+                            OdeButton {
+                                Layout.preferredWidth: 116
+                                Layout.preferredHeight: 32
+                                Layout.alignment: Qt.AlignVCenter
+                                text: "Exportar aquí"
+                                primary: true
+                                enabled: model.writable
+                                onClicked: window.doExport(model.rootPath)
+                            }
                         }
                     }
                 }

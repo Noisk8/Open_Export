@@ -3,6 +3,7 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 #include "library/DatabaseManager.h"
@@ -23,10 +24,17 @@ int main(int argc, char* argv[]) {
     QQuickStyle::setStyle(QStringLiteral("Basic")); // fully themed by our QML
 
     // Local library database (application-owned, not the export format).
-    const QString dataDir =
-            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dataDir); // the AppDataLocation may not exist yet
-    const QString dbPath = dataDir + QStringLiteral("/library.db");
+    // ODE_LIBRARY_DB lets developers/tests point at a throwaway database
+    // without touching the real library.
+    QString dbPath = QString::fromLocal8Bit(qgetenv("ODE_LIBRARY_DB"));
+    if (dbPath.isEmpty()) {
+        const QString dataDir =
+                QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QDir().mkpath(dataDir); // the AppDataLocation may not exist yet
+        dbPath = dataDir + QStringLiteral("/library.db");
+    } else {
+        QDir().mkpath(QFileInfo(dbPath).absolutePath());
+    }
 
     opendeck::library::DatabaseManager dbManager(dbPath);
     {
@@ -47,6 +55,8 @@ int main(int argc, char* argv[]) {
     opendeck::ui::ExportController exporter(playlists);
 
     // The analysis runs on a worker thread; refresh the table once it ends.
+    // bindToLibrary() makes sure newly imported tracks become pending.
+    analysis.bindToLibrary(library);
     QObject::connect(&analysis, &opendeck::ui::AnalysisController::finished,
             &library, [&library](int, int) { library.refresh(); });
 

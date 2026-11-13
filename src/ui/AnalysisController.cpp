@@ -7,6 +7,7 @@
 #include "library/DatabaseManager.h"
 #include "library/TrackRepository.h"
 #include "ui/AnalysisWorker.h"
+#include "ui/LibraryController.h"
 
 namespace opendeck {
 namespace ui {
@@ -14,10 +15,7 @@ namespace ui {
 AnalysisController::AnalysisController(library::DatabaseManager& db, QObject* parent)
         : QObject(parent), m_db(db) {
     qRegisterMetaType<audio::AnalysisResult>("opendeck::audio::AnalysisResult");
-    updatePendingCount();
-    setStatus(m_pendingCount > 0
-                      ? QStringLiteral("%1 pistas pendientes de analizar").arg(m_pendingCount)
-                      : QStringLiteral("Toda la biblioteca está analizada"));
+    refresh();
 }
 
 AnalysisController::~AnalysisController() {
@@ -37,6 +35,23 @@ void AnalysisController::setStatus(const QString& text) {
     }
     m_statusText = text;
     emit statusTextChanged();
+}
+
+void AnalysisController::bindToLibrary(LibraryController& library) {
+    connect(&library, &LibraryController::importFinished, this,
+            [this](int, int) { refresh(); });
+    connect(&library, &LibraryController::trackCountChanged, this,
+            &AnalysisController::refresh);
+}
+
+void AnalysisController::refresh() {
+    updatePendingCount();
+    if (!m_running) {
+        setStatus(m_pendingCount > 0
+                          ? QStringLiteral("%1 pistas pendientes de analizar")
+                                    .arg(m_pendingCount)
+                          : QStringLiteral("Toda la biblioteca está analizada"));
+    }
 }
 
 void AnalysisController::updatePendingCount() {

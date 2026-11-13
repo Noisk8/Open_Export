@@ -15,6 +15,7 @@ class DatabaseManager;
 namespace ui {
 
 class AnalysisWorker;
+class LibraryController;
 
 // AnalysisController drives the analysis of the local library from QML.
 //
@@ -41,6 +42,16 @@ class AnalysisController : public QObject {
     // Analyses every track that is not yet analysed.
     Q_INVOKABLE void analyzeAll();
     Q_INVOKABLE void cancel();
+
+    // Subscribes to the library's import/reload signals so that tracks added
+    // after startup immediately become "pending". The controller owns this
+    // wiring so no caller has to remember to connect the signals.
+    void bindToLibrary(LibraryController& library);
+
+  public slots:
+    // Recomputes pendingCount after the library changes (imports, deletions,
+    // manual reloads). Called from QML and connected to LibraryController.
+    void refresh();
 
   signals:
     void runningChanged();
