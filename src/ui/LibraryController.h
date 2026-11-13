@@ -20,6 +20,7 @@ class LibraryController : public QAbstractListModel {
     // QML binds to this as a property; a Q_INVOKABLE method read without
     // parentheses evaluates to a JS function, not to the number.
     Q_PROPERTY(int trackCount READ trackCount NOTIFY trackCountChanged)
+    Q_PROPERTY(int missingCount READ missingCount NOTIFY missingCountChanged)
   public:
     enum Roles {
         IdRole = Qt::UserRole + 1,
@@ -53,17 +54,26 @@ class LibraryController : public QAbstractListModel {
     // Reloads the model, for example after the analysis updated the metadata.
     Q_INVOKABLE void refresh();
 
+    // Tracks whose audio file is no longer at the stored path.
+    Q_INVOKABLE int missingCount() const;
+    // Searches the mounted volumes for the missing files and repairs the paths.
+    // Returns how many tracks were found again.
+    Q_INVOKABLE int relocateMissing();
+
   signals:
     void importProgress(int current, int total);
     void importFinished(int imported, int skipped);
     void trackCountChanged();
+    void missingCountChanged();
 
   private:
     void reload();
     void collectAudioFiles(const QString& dir, QStringList& out);
+    void updateMissingCount();
 
     library::DatabaseManager& m_db;
     QList<core::Track> m_tracks;
+    int m_missingCount = 0;
 };
 
 } // namespace ui

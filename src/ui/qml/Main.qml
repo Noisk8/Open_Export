@@ -554,6 +554,31 @@ ApplicationWindow {
 
                 Item { Layout.fillHeight: true }
 
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: library.missingCount > 0
+                    Text {
+                        Layout.fillWidth: true
+                        text: library.missingCount + " pistas sin archivo: se omitirán al exportar"
+                        color: warning
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                    }
+                    OdeButton {
+                        Layout.preferredWidth: 92
+                        Layout.preferredHeight: 26
+                        text: "Relocalizar"
+                        onClicked: {
+                            const n = library.relocateMissing()
+                            window.setStatus(n > 0
+                                ? ("Relocalizadas " + n + " pistas")
+                                : "No se encontraron los archivos; conecta el dispositivo o vuelve a importar",
+                                n > 0)
+                        }
+                    }
+                }
+
                 Text {
                     Layout.fillWidth: true
                     text: playlists.totalTrackCount + " pistas en listas · " + library.trackCount + " en biblioteca"

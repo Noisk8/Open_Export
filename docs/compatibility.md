@@ -40,6 +40,8 @@ Estados posibles:
 | Exportación en segundo plano (progreso y cancelación) | `STRUCTURALLY_VALIDATED` |
 | Validación de exportaciones | `STRUCTURALLY_VALIDATED` |
 | Exportación incremental | `STRUCTURALLY_VALIDATED` |
+| Relocalización de pistas tras cambio de punto de montaje | `STRUCTURALLY_VALIDATED` |
+| Exportación coherente con pistas de audio ausentes | `STRUCTURALLY_VALIDATED` |
 | Conversión FLAC → WAV sin pérdida | `STRUCTURALLY_VALIDATED` |
 | Empaquetado TGZ / DEB | `STRUCTURALLY_VALIDATED` |
 | `exportLibrary.db` (OneLibrary / Device Library Plus) | `STRUCTURALLY_VALIDATED` (abierto con SQLCipher 4.13 real) |

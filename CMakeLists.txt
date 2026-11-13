@@ -37,6 +37,7 @@ add_library(ode_core STATIC
     src/library/PlaylistRepository.cpp
     src/library/AudioImportService.cpp
     src/library/ArtworkExtractor.cpp
+    src/library/LibraryRelocator.cpp
     src/audio/AudioAnalysisService.cpp
     src/devices/UsbDevice.cpp
     src/devices/UsbDeviceManager.cpp
@@ -183,6 +184,12 @@ if(BUILD_TESTING)
     )
     target_link_libraries(open-deck-tests-analysis-flow PRIVATE ode_core Qt6::Test)
     add_test(NAME unit-analysis-flow COMMAND open-deck-tests-analysis-flow)
+
+    qt_add_executable(open-deck-tests-missing-sources
+        tests/integration/test_missing_sources.cpp
+    )
+    target_link_libraries(open-deck-tests-missing-sources PRIVATE ode_core Qt6::Test)
+    add_test(NAME integration-missing-sources COMMAND open-deck-tests-missing-sources)
 endif()
 
 # ---- Packaging (Fase 7) -----------------------------------------------------

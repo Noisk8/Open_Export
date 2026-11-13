@@ -148,3 +148,25 @@ ODE_LIBRARY_DB=/tmp/ode-test/library.db ./build/open-deck-export
 `QStandardPaths::AppDataLocation`). El diálogo ofrece además
 «Analizar + exportar», que encadena `analysis.analyzeAll()` con
 `exporter.exportTo()` mediante la señal `AnalysisController::finished`.
+
+
+## Pistas con rutas muertas
+
+Cuando un USB se reformatea o se monta con otra etiqueta, las rutas guardadas
+en `tracks.file_path` dejan de existir. Dos mecanismos evitan que eso rompa la
+exportación:
+
+* `LibraryRelocator::relocate()` busca cada archivo perdido bajo los volúmenes
+  montados (mismo sufijo de ruta, nombre original dentro de `Contents/` y, si
+  hay ambigüedad, SHA-256 del contenido) y actualiza la BD. Se ejecuta al
+  arrancar, al cambiar los dispositivos y desde el botón «Relocalizar».
+* `ExportManager::write()` construye `export.pdb` y `exportLibrary.db` **sólo
+  con las pistas cuyo audio se pudo leer**, y filtra las entradas de playlist
+  que apuntan a las omitidas. Si no se hiciera, la BD tendría filas sin audio y
+  `ExportValidator` devolvería un error por pista. También evita borrar el
+  archivo cuando origen y destino son el mismo fichero (exportar sobre el USB
+  que ya contiene `Contents/`).
+
+`tests/integration/test_missing_sources.cpp` cubre los tres casos. El mensaje
+de la UI resume los problemas de validación en lugar de volcar cientos de
+líneas.

@@ -34,18 +34,28 @@ void ExportWorker::run() {
 
     QStringList issues;
     if (!device::ExportValidator::validateExport(m_options.destination, &issues)) {
+        // A full list of issues can be hundreds of lines long. Show a short
+        // summary plus the first few entries, which is what the UI can display.
+        QStringList shown = issues.mid(0, 4);
+        if (issues.size() > shown.size()) {
+            shown.append(QStringLiteral("… y %1 más").arg(issues.size() - shown.size()));
+        }
         emit finished(false,
-                issues.isEmpty() ? QStringLiteral("La exportación tiene problemas")
-                                 : issues.join(QStringLiteral("\n")),
+                QStringLiteral("La validación encontró %1 problemas: %2")
+                        .arg(issues.size())
+                        .arg(shown.join(QStringLiteral(" · "))),
                 false);
         return;
     }
 
-    const QString message =
-            QStringLiteral("Exportadas %1 pistas, %2 listas y %3 análisis")
-                    .arg(report.trackCount)
-                    .arg(report.playlistCount)
-                    .arg(report.analysisCount);
+    QString message = QStringLiteral("Exportadas %1 pistas, %2 listas y %3 análisis")
+                              .arg(report.trackCount)
+                              .arg(report.playlistCount)
+                              .arg(report.analysisCount);
+    if (report.missingTracks > 0) {
+        message += QStringLiteral(" · %1 pistas omitidas (archivo de audio no encontrado)")
+                           .arg(report.missingTracks);
+    }
     emit finished(true, message, false);
 }
 

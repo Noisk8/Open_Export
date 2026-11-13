@@ -54,11 +54,17 @@ int main(int argc, char* argv[]) {
     opendeck::ui::AnalysisController analysis(dbManager);
     opendeck::ui::ExportController exporter(playlists);
 
+    // Repair paths whose volume was remounted under a different label before
+    // doing anything else, and retry whenever a removable device appears.
+    library.relocateMissing();
+
     // The analysis runs on a worker thread; refresh the table once it ends.
     // bindToLibrary() makes sure newly imported tracks become pending.
     analysis.bindToLibrary(library);
     QObject::connect(&analysis, &opendeck::ui::AnalysisController::finished,
             &library, [&library](int, int) { library.refresh(); });
+    QObject::connect(&devices, &opendeck::ui::DeviceController::devicesChanged,
+            &library, [&library]() { library.relocateMissing(); });
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("library"), &library);

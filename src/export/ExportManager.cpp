@@ -223,6 +223,29 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         const QString root = target.absoluteFilePath();
         const QString createdDate = QDate::currentDate().toString(Qt::ISODate);
 
+        // --- Only export tracks whose audio is actually reachable ------------
+        // A track whose source file disappeared must NOT be written into the
+        // databases: that would produce a USB with rows pointing at missing
+        // audio and a validation failure with one error per track.
+        QList<ExportTrack> exportable;
+        QSet<quint32> exportableIds;
+        for (const ExportTrack& item : library.tracks) {
+            const QFileInfo source(item.track.filePath);
+            if (!source.isFile() || !source.isReadable()) {
+                ++report.missingTracks;
+                report.warnings.append(
+                        QStringLiteral("Archivo no encontrado: %1").arg(item.track.filePath));
+                continue;
+            }
+            exportable.append(item);
+            exportableIds.insert(item.deviceId);
+        }
+        if (exportable.isEmpty()) {
+            throw std::runtime_error(
+                    "Ninguna pista tiene un archivo de audio accesible. Conecta el "
+                    "dispositivo con la música o vuelve a importar las pistas.");
+        }
+
         // A previous export lets the incremental mode reuse unchanged files.
         const ExportManifest previous =
                 options.incremental ? ExportManifest::load(root, error) : ExportManifest();
@@ -230,7 +253,6 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         next.valid = true;
         next.version = ExportManifest::kVersion;
         next.createdDate = createdDate;
-        next.libraryDigest = ExportManifest::libraryHash(library);
 
         // --- Artwork ids are assigned up front -------------------------------
         // They must not depend on which tracks the incremental mode skips, or
@@ -242,7 +264,7 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         QHash<QByteArray, quint32> seenArtwork;
         quint32 nextArtworkId = 1;
         if (options.writeArtwork) {
-            for (const ExportTrack& item : library.tracks) {
+            for (const ExportTrack& item : exportable) {
                 const QList<library::EmbeddedArtwork> artwork =
                         library::readEmbeddedArtwork(item.track.filePath);
                 for (const library::EmbeddedArtwork& image : artwork) {
@@ -272,21 +294,16 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         }
 
         // --- Copy the audio and write the analysis --------------------------
-        for (int index = 0; index < library.tracks.size(); ++index) {
-            const ExportTrack& item = library.tracks.at(index);
+        for (int index = 0; index < exportable.size(); ++index) {
+            const ExportTrack& item = exportable.at(index);
             const core::Track& track = item.track;
-            const QFileInfo source(track.filePath);
-            if (!source.isFile() || !source.isReadable()) {
-                report.warnings.append(QStringLiteral("No se pudo leer %1").arg(track.filePath));
-                continue;
-            }
 
             if (callbacks.cancelled && callbacks.cancelled()) {
                 report.cancelled = true;
                 return report;
             }
             if (callbacks.progress) {
-                callbacks.progress(index, static_cast<int>(library.tracks.size()),
+                callbacks.progress(index, static_cast<int>(exportable.size()),
                         item.fileName);
             }
 
@@ -294,6 +311,10 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
             next.tracks.insert(item.devicePath, trackDigest);
             const QString audioTarget = root + item.devicePath;
             const QString anlzTarget = root + item.analyzePath;
+            // Exporting onto the same volume that already holds Contents/ means
+            // source and destination can be the very same file: never delete it.
+            const bool sameFile = QFileInfo(track.filePath).absoluteFilePath()
+                    == QFileInfo(audioTarget).absoluteFilePath();
             const bool reusable = previous.valid
                     && previous.tracks.value(item.devicePath) == trackDigest
                     && (!options.copyAudio || QFile::exists(audioTarget))
@@ -303,7 +324,7 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
                 continue;
             }
 
-            if (options.copyAudio) {
+            if (options.copyAudio && !sameFile) {
                 QDir().mkpath(QFileInfo(audioTarget).absolutePath());
                 // An export may be written over a previous one.
                 QFile::remove(audioTarget);
@@ -355,11 +376,26 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         }
 
         // --- Both databases --------------------------------------------------
-        ExportLibrary prepared = library;
+        // Build them from the tracks that were really written, and drop the
+        // playlist entries that pointed at missing files. Otherwise a USB with
+        // unreadable sources would still end up with a consistent database.
+        ExportLibrary prepared;
+        prepared.tracks = exportable;
         for (ExportTrack& item : prepared.tracks) {
             item.artworkId = artworkIds.value(item.track.id, 0);
             item.artworkPath = artworkPaths.value(item.track.id, QString());
         }
+        for (const ExportPlaylist& playlist : library.playlists) {
+            ExportPlaylist filtered = playlist;
+            filtered.trackIds.clear();
+            for (quint32 trackId : playlist.trackIds) {
+                if (exportableIds.contains(trackId)) {
+                    filtered.trackIds.append(trackId);
+                }
+            }
+            prepared.playlists.append(filtered);
+        }
+        next.libraryDigest = ExportManifest::libraryHash(prepared);
 
         DeviceSqlWriter writer;
         writer.setLibrary(prepared);

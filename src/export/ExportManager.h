@@ -46,6 +46,7 @@ struct ExportReport {
     int artworkCount = 0;
     int skippedTracks = 0;  // incremental: reused without copying
     int removedTracks = 0;  // incremental: stale files deleted
+    int missingTracks = 0;  // source audio not reachable; excluded from the export
     bool cancelled = false;
     QStringList warnings;
 };

@@ -321,7 +321,14 @@ especificaciones públicas, está en
 5. La copia del audio (que puede ser de varios GB a un pendrive FAT32) se hace
    **en segundo plano**: la ventana sigue respondiendo, muestra el progreso
    pista a pista y permite cancelar. Al terminar se valida lo escrito.
-6. En el diálogo, si quedan pistas sin analizar, aparece un aviso con
+6. Si algunas pistas de la biblioteca ya no tienen archivo (por ejemplo, el USB
+   se reformateó o se montó con otra etiqueta), la barra izquierda muestra
+   **«N pistas sin archivo»**. El botón **«Relocalizar»** busca los archivos en
+   los volúmenes montados y repara las rutas; la app también lo intenta sola al
+   arrancar y al conectar un dispositivo. Las que no se encuentren **se omiten**
+   de la exportación (y de `export.pdb`/`exportLibrary.db`), de modo que la
+   exportación sigue siendo válida en lugar de fallar la validación.
+7. En el diálogo, si quedan pistas sin analizar, aparece un aviso con
    **«Analizar ahora»** y, en cada dispositivo, **«Analizar + exportar»**:
    analiza en segundo plano y exporta automáticamente al terminar. También
    puedes activar/desactivar **Device Library Plus** y la **exportación
@@ -386,6 +393,8 @@ se ejecuta al final del `CMakeLists.txt`.
   reproductor lo necesita para leer las listas.
 - La importación es síncrona; el análisis, la exportación y la conversión van
   en hilos de trabajo con progreso y cancelación.
+- Las pistas cuyo archivo de audio no existe se excluyen de las bases de datos
+  exportadas; se informa del número de omitidas en el resultado.
 - Una exportación a un USB lento puede tardar minutos: mientras tanto la
   interfaz sigue activa y muestra el avance.
 

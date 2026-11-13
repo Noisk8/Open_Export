@@ -6,6 +6,7 @@
 
 #include "library/AudioImportService.h"
 #include "library/DatabaseManager.h"
+#include "library/LibraryRelocator.h"
 #include "library/TrackRepository.h"
 
 namespace opendeck {
@@ -130,6 +131,31 @@ void LibraryController::reload() {
     m_tracks = repository.allTracks();
     endResetModel();
     emit trackCountChanged();
+    updateMissingCount();
+}
+
+void LibraryController::updateMissingCount() {
+    int count = 0;
+    for (const core::Track& track : m_tracks) {
+        if (!QFileInfo::exists(track.filePath) || !QFileInfo(track.filePath).isFile()) {
+            ++count;
+        }
+    }
+    if (count != m_missingCount) {
+        m_missingCount = count;
+        emit missingCountChanged();
+    }
+}
+
+int LibraryController::missingCount() const {
+    return m_missingCount;
+}
+
+int LibraryController::relocateMissing() {
+    QString error;
+    const library::RelocationReport report = library::LibraryRelocator::relocate(m_db, &error);
+    reload();
+    return report.relocated;
 }
 
 void LibraryController::refresh() {
