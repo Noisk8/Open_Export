@@ -1,0 +1,35 @@
+Open Deck Export
+Copyright (C) 2026 Open Deck Export contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+SPDX-License-Identifier: GPL-3.0-or-later
+
+------------------------------------------------------------------------------
+
+NOTA (por revisar antes de distribuir):
+
+El texto completo de la GPL-3.0 se encuentra en
+https://www.gnu.org/licenses/gpl-3.0.txt y debe incluirse junto a este archivo.
+
+Este proyecto vincula dependencias con licencias propias que imponen
+obligaciones adicionales (resumen, no exhaustivo):
+
+  - Qt 6          : LGPL-3.0 / GPL-3.0 / comercial
+  - TagLib        : LGPL-2.1 o MPL-1.1
+  - SQLite        : dominio público
+  - FFmpeg        : LGPL-2.1+ / GPL-2.0+ (según componentes)
+  - rekordcrate   : MPL-2.0 (solo como referencia, no vinculado)
+
+La elección final de licencia y la compatibilidad entre estas dependencias deben
+revisarse antes de publicar binarios.

@@ -1,0 +1,325 @@
+#include "export/ExportManager.h"
+
+#include <QDate>
+#include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QImage>
+#include <QSaveFile>
+#include <QSet>
+#include <QStringList>
+
+#include <stdexcept>
+
+#include "export/anlz/AnlzWriter.h"
+#include "export/devicesql/DeviceSqlWriter.h"
+#include "library/ArtworkExtractor.h"
+#include "library/DatabaseManager.h"
+#include "library/TrackRepository.h"
+
+namespace opendeck {
+namespace device {
+
+namespace {
+
+// Rekordbox truncates the name of the audio files to 43 characters.
+constexpr int kMaxFileStem = 43;
+
+// Removes the characters that a FAT32 volume cannot hold.
+QString sanitize(const QString& value, const QString& fallback) {
+    QString result;
+    result.reserve(value.size());
+    for (const QChar c : value) {
+        if (c == QChar('/') || c == QChar('\\') || c == QChar(':') || c == QChar('*')
+                || c == QChar('?') || c == QChar('"') || c == QChar('<') || c == QChar('>')
+                || c == QChar('|') || c == QChar(0)) {
+            result.append(QChar('_'));
+        } else {
+            result.append(c);
+        }
+    }
+    result = result.trimmed();
+    if (result.isEmpty()) {
+        return fallback;
+    }
+    return result;
+}
+
+void writeFile(const QString& path, const QByteArray& data) {
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        throw std::runtime_error(file.errorString().toStdString());
+    }
+    if (file.write(data) != data.size() || !file.commit()) {
+        throw std::runtime_error(file.errorString().toStdString());
+    }
+}
+
+// Resizes an image and writes it as a JPEG.
+bool writeArtworkFile(const QString& path, const QByteArray& data) {
+    QImage image;
+    if (!image.loadFromData(data)) {
+        return false;
+    }
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QImage small = image.scaled(80, 80, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QImage large = image.scaled(240, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    if (!small.save(path, "JPG", 85)) {
+        return false;
+    }
+    QFileInfo info(path);
+    const QString largePath = info.absolutePath() + QChar('/') + info.completeBaseName()
+            + QStringLiteral("_m.jpg");
+    large.save(largePath, "JPG", 90);
+    return true;
+}
+
+} // namespace
+
+int ExportManager::fileTypeFor(const QString& filePath) {
+    const QString suffix = QFileInfo(filePath).suffix().toLower();
+    if (suffix == QStringLiteral("mp3")) {
+        return 1;
+    }
+    if (suffix == QStringLiteral("m4a")) {
+        return 4;
+    }
+    if (suffix == QStringLiteral("flac")) {
+        return 5;
+    }
+    if (suffix == QStringLiteral("wav")) {
+        return 11;
+    }
+    if (suffix == QStringLiteral("aif") || suffix == QStringLiteral("aiff")) {
+        return 12;
+    }
+    return 0;
+}
+
+QString ExportManager::audioPath(const core::Track& track) {
+    const QFileInfo info(track.filePath);
+    const QString artist = sanitize(track.artist, QStringLiteral("Unknown Artist"));
+    const QString album = sanitize(track.album, QStringLiteral("Unknown Album"));
+    const QString extension = info.suffix().toLower();
+
+    QString stem = sanitize(track.title.isEmpty() ? info.completeBaseName() : track.title,
+            QStringLiteral("Track"));
+    if (stem.size() > kMaxFileStem) {
+        stem.truncate(kMaxFileStem);
+    }
+    const QString fileName = extension.isEmpty() ? stem : stem + QChar('.') + extension;
+    return QStringLiteral("/Contents/%1/%2/%3").arg(artist, album, fileName);
+}
+
+ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists) const {
+    Q_ASSERT(m_db != nullptr);
+    library::TrackRepository repository(*m_db);
+
+    // Collect the tracks of the playlists, keeping the order of the first
+    // appearance.
+    QList<qint64> trackIds;
+    QSet<qint64> seen;
+    for (const core::Playlist& playlist : playlists) {
+        for (qint64 id : playlist.trackIds) {
+            if (!seen.contains(id)) {
+                seen.insert(id);
+                trackIds.append(id);
+            }
+        }
+    }
+
+    const QList<core::Track> tracks = repository.tracksByIds(trackIds);
+
+    ExportLibrary library;
+    QHash<qint64, quint32> deviceIds;
+    QSet<QString> usedPaths;
+
+    for (const core::Track& track : tracks) {
+        ExportTrack item;
+        item.track = track;
+        item.deviceId = static_cast<quint32>(library.tracks.size() + 1);
+        deviceIds.insert(track.id, item.deviceId);
+
+        QString path = audioPath(track);
+        // Two tracks may end up with the same name; keep them apart.
+        int suffix = 2;
+        while (usedPaths.contains(path)) {
+            const QFileInfo info(path);
+            const QString extension = info.suffix();
+            const QString stem = extension.isEmpty() ? info.completeBaseName()
+                                                    : info.completeBaseName();
+            path = QStringLiteral("/Contents/%1/%2/%3 (%4).%5")
+                    .arg(info.path().section(QStringLiteral("/"), 2, 2),
+                            info.path().section(QStringLiteral("/"), 3, 3), stem)
+                    .arg(suffix++)
+                    .arg(extension);
+        }
+        usedPaths.insert(path);
+
+        item.devicePath = path;
+        item.fileName = path.section(QChar('/'), -1);
+        item.fileType = fileTypeFor(track.filePath);
+        item.analyzePath = AnlzWriter::analysisPath(path);
+
+        const QFileInfo fileInfo(track.filePath);
+        item.fileSize = fileInfo.exists() ? fileInfo.size() : 0;
+
+        // Resolve the analysis here, on the GUI thread: the export worker must
+        // be able to run without ever touching the SQLite connection.
+        item.beats = repository.beats(track.id);
+        item.cues = repository.cues(track.id);
+        item.peaks = repository.waveform(track.id, 0);
+
+        library.tracks.append(item);
+    }
+
+    // Build the playlist tree, keeping the folders and their order.
+    QHash<qint64, quint32> nodeIds;
+    quint32 nextId = 1;
+    for (const core::Playlist& playlist : playlists) {
+        nodeIds.insert(playlist.id, nextId++);
+    }
+
+    for (const core::Playlist& playlist : playlists) {
+        ExportPlaylist node;
+        node.id = nodeIds.value(playlist.id, 0);
+        node.name = playlist.name;
+        node.parentId = playlist.parentId == 0 ? 0 : nodeIds.value(playlist.parentId, 0);
+        node.sortOrder = static_cast<quint32>(playlist.sortOrder);
+        node.isFolder = playlist.isFolder;
+        for (qint64 id : playlist.trackIds) {
+            const quint32 deviceId = deviceIds.value(id, 0);
+            if (deviceId != 0) {
+                node.trackIds.append(deviceId);
+            }
+        }
+        library.playlists.append(node);
+    }
+
+    return library;
+}
+
+ExportReport ExportManager::write(const ExportLibrary& library, const ExportOptions& options,
+                                  QString* error, const ExportCallbacks& callbacks) {
+    ExportReport report;
+    if (error) {
+        error->clear();
+    }
+
+    try {
+        const QFileInfo target(options.destination);
+        if (options.destination.trimmed().isEmpty() || !target.isDir()) {
+            throw std::runtime_error("El destino no es un directorio válido");
+        }
+        if (library.tracks.isEmpty()) {
+            throw std::runtime_error("No hay pistas para exportar");
+        }
+
+        const QString root = target.absoluteFilePath();
+
+        // --- Copy the audio and write the analysis --------------------------
+        QHash<qint64, quint32> artworkIds;
+        QHash<qint64, QString> artworkPaths;
+        quint32 nextArtworkId = 1;
+
+        for (int index = 0; index < library.tracks.size(); ++index) {
+            const ExportTrack& item = library.tracks.at(index);
+            const core::Track& track = item.track;
+            const QFileInfo source(track.filePath);
+            if (!source.isFile() || !source.isReadable()) {
+                report.warnings.append(QStringLiteral("No se pudo leer %1").arg(track.filePath));
+                continue;
+            }
+
+            if (callbacks.cancelled && callbacks.cancelled()) {
+                report.cancelled = true;
+                return report;
+            }
+            if (callbacks.progress) {
+                callbacks.progress(index, static_cast<int>(library.tracks.size()),
+                        item.fileName);
+            }
+
+            if (options.copyAudio) {
+                const QString destination = root + item.devicePath;
+                QDir().mkpath(QFileInfo(destination).absolutePath());
+                // An export may be written over a previous one.
+                QFile::remove(destination);
+                if (!QFile::copy(track.filePath, destination)) {
+                    throw std::runtime_error("No se pudo copiar " + track.filePath.toStdString());
+                }
+            }
+
+            if (options.writeAnalysis) {
+                AnlzData data;
+                data.devicePath = item.devicePath;
+                data.duration = track.duration;
+                data.beats = item.beats;
+                data.cues = item.cues;
+                data.peaks = item.peaks;
+
+                const QString directory = root + AnlzWriter::analysisDirectory(item.devicePath);
+                QDir().mkpath(directory);
+                writeFile(directory + QStringLiteral("/ANLZ0000.DAT"),
+                        AnlzWriter::buildDat(data));
+                writeFile(directory + QStringLiteral("/ANLZ0000.EXT"),
+                        AnlzWriter::buildExt(data));
+                writeFile(directory + QStringLiteral("/ANLZ0000.2EX"),
+                        AnlzWriter::build2Ex(data));
+                ++report.analysisCount;
+            }
+
+            if (options.writeArtwork && !artworkIds.contains(track.id)) {
+                const QList<library::EmbeddedArtwork> artwork =
+                        library::readEmbeddedArtwork(track.filePath);
+                for (const library::EmbeddedArtwork& image : artwork) {
+                    if (!image.mimeType.contains(QStringLiteral("jpeg"))
+                            && !image.mimeType.contains(QStringLiteral("jpg"))) {
+                        continue;
+                    }
+                    const quint32 id = nextArtworkId++;
+                    const QString folder = QStringLiteral("/PIONEER/Artwork/%1")
+                            .arg((id - 1) / 20 + 1, 5, 10, QChar('0'));
+                    const QString path = root + folder
+                            + QStringLiteral("/a%1.jpg").arg(id);
+                    if (writeArtworkFile(path, image.data)) {
+                        artworkIds.insert(track.id, id);
+                        artworkPaths.insert(track.id, folder
+                                + QStringLiteral("/a%1.jpg").arg(id));
+                        ++report.artworkCount;
+                    }
+                    break;
+                }
+            }
+        }
+
+        // --- The DeviceSQL database -----------------------------------------
+        ExportLibrary prepared = library;
+        for (ExportTrack& item : prepared.tracks) {
+            item.artworkId = artworkIds.value(item.track.id, 0);
+            item.artworkPath = artworkPaths.value(item.track.id, QString());
+        }
+
+        DeviceSqlWriter writer;
+        writer.setLibrary(prepared);
+        writer.setCreationDate(QDate::currentDate().toString(Qt::ISODate));
+        const QByteArray database = writer.build();
+
+        const QString databasePath = root + QStringLiteral("/PIONEER/rekordbox/export.pdb");
+        writeFile(databasePath, database);
+
+        report.trackCount = static_cast<int>(prepared.tracks.size());
+        report.playlistCount = static_cast<int>(prepared.playlists.size());
+        return report;
+    } catch (const std::exception& e) {
+        if (error) {
+            *error = QString::fromUtf8(e.what());
+        }
+        return report;
+    }
+}
+
+} // namespace device
+} // namespace opendeck
