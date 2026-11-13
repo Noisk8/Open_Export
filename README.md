@@ -56,6 +56,41 @@ cmake --build build
 ./build/open-deck-export
 ```
 
+## Instalación y comando `open-deck-export`
+
+Para poder lanzar la aplicación con el comando `open-deck-export` desde
+cualquier directorio (y tener un acceso directo en el menú de aplicaciones):
+
+```sh
+cmake --install build --prefix "$HOME/.local"
+open-deck-export
+```
+
+Esto instala en `~/.local`:
+
+| Ruta | Contenido |
+|---|---|
+| `bin/open-deck-export` | el ejecutable |
+| `bin/OpenDeckExport/` | el módulo QML (`qmldir` + `.qml`) que el motor necesita en el import path |
+| `share/applications/open-deck-export.desktop` | acceso directo del menú, con `Exec=open-deck-export` |
+| `share/icons/hicolor/scalable/apps/open-deck-export.svg` | icono |
+| `share/doc/open-deck-export/` | README, licencia y `docs/` |
+
+`~/.local/bin` debe estar en el `PATH` (lo está por defecto en la mayoría de
+las distribuciones). Para un icono en el escritorio, copia el `.desktop` a
+`~/Desktop/` y márcalo como confiable:
+
+```sh
+cp ~/.local/share/applications/open-deck-export.desktop ~/Desktop/
+chmod +x ~/Desktop/open-deck-export.desktop
+gio set ~/Desktop/open-deck-export.desktop metadata::trusted true
+```
+
+> El directorio `bin/OpenDeckExport/` no es opcional: `loadFromModule()` de Qt
+> necesita el `qmldir` en el import path. Sin él, un binario instalado fuera del
+> directorio de compilación falla con *«Module OpenDeckExport contains no type
+> named Main»* aunque el QML también esté compilado dentro del `qrc`.
+
 ## Pruebas
 
 ```sh

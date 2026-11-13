@@ -17,6 +17,17 @@ install(TARGETS open-deck-export
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# qt_add_qml_module() generates a qmldir plus the .qml/.qmltypes files in
+# <build>/<URI>/. QQmlApplicationEngine::loadFromModule() needs that directory
+# on the QML import path; Qt adds the executable's own directory, so install the
+# module next to the binary. Without it an installed binary fails with
+# "Module OpenDeckExport contains no type named Main" even though the QML is
+# also compiled into the qrc resources.
+install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/OpenDeckExport/
+    DESTINATION ${CMAKE_INSTALL_BINDIR}/OpenDeckExport
+    PATTERN "*.qrc" EXCLUDE
+)
+
 install(FILES
     ${CMAKE_SOURCE_DIR}/resources/open-deck-export.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications

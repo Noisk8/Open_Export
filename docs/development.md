@@ -115,3 +115,14 @@ una prueba de ingeniería inversa verificable, y documentarse en `docs/`.
 * Todos los workers usan el mismo patrón: flag de cancelación atómico en el
   controlador + `QPointer` al worker, para evitar el *use-after-free* de
   `deleteLater` (ver la sección «Hilos de trabajo»).
+
+
+## Instalación local y módulo QML
+
+`cmake --install build --prefix "$HOME/.local"` deja el comando
+`open-deck-export` en `~/.local/bin`. `cmake/Packaging.cmake` instala además
+`${CMAKE_CURRENT_BINARY_DIR}/OpenDeckExport/` junto al binario: Qt añade el
+directorio del ejecutable al import path de QML y `loadFromModule()` necesita
+ese `qmldir`. Sin esta regla, el binario **instalado** (y los paquetes
+TGZ/DEB) fallan al arrancar aunque el QML esté en el `qrc`. Compruébalo siempre
+ejecutando el binario instalado desde un directorio distinto de `build/`.
