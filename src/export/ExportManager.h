@@ -28,6 +28,14 @@ struct ExportOptions {
 
     // Writes the cover art of the tracks.
     bool writeArtwork = true;
+
+    // Writes exportLibrary.db (Device Library Plus / OneLibrary), the
+    // SQLCipher database used by the 2023+ Pioneer players.
+    bool writeDeviceLibrary = true;
+
+    // Reuses the audio and ANLZ files of an existing export when their content
+    // has not changed. The databases are always rewritten.
+    bool incremental = false;
 };
 
 // ExportReport summarises what an export produced.
@@ -36,6 +44,8 @@ struct ExportReport {
     int playlistCount = 0;
     int analysisCount = 0;
     int artworkCount = 0;
+    int skippedTracks = 0;  // incremental: reused without copying
+    int removedTracks = 0;  // incremental: stale files deleted
     bool cancelled = false;
     QStringList warnings;
 };

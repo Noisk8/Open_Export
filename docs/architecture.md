@@ -31,6 +31,10 @@
 │               BPM, beat grid, tono, waveform)│
 │  src/devices  UsbDeviceManager (sysfs +      │
 │               QStorageInfo: volúmenes FAT32) │
+│  src/export/  onelibrary: DeviceLibraryWriter│
+│               (22 tablas) + SqlCipherWriter  │
+│               (SQLCipher 4 con OpenSSL)      │
+│  src/export/  ExportManifest (incremental)   │
 ├──────────────┴──────────────────────────────┤
 │  src/export   ExportManager, ExportValidator│
 │               devicesql/ (DeviceSQL),       │
@@ -63,11 +67,14 @@
 | `core` (modelos) | ✅ `Track`, `Playlist` |
 | `library` (SQLite + importación) | ✅ Fase 1 + carátulas |
 | `audio` (análisis) | ✅ Fase 2 (FFmpeg + FFT propia) |
-| `cues` | ⏳ Fase 3 (el ANLZ ya los sabe escribir) |
+| `cues` | ✅ Fase 3 (editor + ANLZ + OneLibrary) |
 | `export` (DeviceSQL + ANLZ) | ✅ Fases 4–5 |
 | `export` (volumen USB + validación) | ✅ Fase 6 |
 | `devices` (detección USB) | ✅ Fase 6 |
-| `ui` | ✅ biblioteca, playlists, análisis y selector USB |
+| `export` (OneLibrary + incremental) | ✅ Fase 7 |
+| `ui` (conversor FLAC → WAV) | ✅ Fase 7 |
+| empaquetado TGZ/DEB | ✅ Fase 7 |
+| `ui` | ✅ biblioteca, playlists, cues, análisis, selector USB, exportación y conversor |
 
 ## Formato de exportación
 

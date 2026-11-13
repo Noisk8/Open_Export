@@ -6,6 +6,7 @@
 
 #include "export/devicesql/DeviceSqlRow.h"
 #include "export/devicesql/DeviceSqlString.h"
+#include "export/MenuData.h"
 
 namespace opendeck {
 namespace device {
@@ -82,90 +83,6 @@ constexpr quint16 kTrackUnknown18 = 0x2fdb;
 constexpr quint16 kTrackUnknown1a = 0x8f45;
 constexpr quint16 kTrackUnknown26 = 41;
 constexpr quint16 kTrackUnknown30 = 3;
-
-// ---------------------------------------------------------------------------
-// Static tables of a rekordbox export.
-// ---------------------------------------------------------------------------
-
-struct ColumnEntry {
-    quint16 id;
-    quint16 kind;
-    const char* name;
-};
-
-// The browse menu of the player: the columns that can be browsed.
-constexpr ColumnEntry kColumns[] = {
-        {0x01, 0x80, "GENRE"},
-        {0x02, 0x81, "ARTIST"},
-        {0x03, 0x82, "ALBUM"},
-        {0x04, 0x83, "TRACK"},
-        {0x05, 0x85, "BPM"},
-        {0x06, 0x86, "RATING"},
-        {0x07, 0x87, "YEAR"},
-        {0x08, 0x88, "REMIXER"},
-        {0x09, 0x89, "LABEL"},
-        {0x0a, 0x8a, "ORIGINAL ARTIST"},
-        {0x0b, 0x8b, "KEY"},
-        {0x0c, 0x8d, "CUE"},
-        {0x0d, 0x8e, "COLOR"},
-        {0x0e, 0x92, "TIME"},
-        {0x0f, 0x93, "BITRATE"},
-        {0x10, 0x94, "FILE NAME"},
-        {0x11, 0x84, "PLAYLIST"},
-        {0x12, 0x98, "HOT CUE BANK"},
-        {0x13, 0x95, "HISTORY"},
-        {0x14, 0x91, "SEARCH"},
-        {0x15, 0x96, "COMMENTS"},
-        {0x16, 0x8c, "DATE ADDED"},
-        {0x17, 0x97, "DJ PLAY COUNT"},
-        {0x18, 0x90, "FOLDER"},
-        {0x19, 0xa1, "DEFAULT"},
-        {0x1a, 0xa2, "ALPHABET"},
-        {0x1b, 0xaa, "MATCHING"},
-};
-
-struct MenuEntry {
-    quint16 itemId;
-    quint16 sequence;
-    quint32 flags;
-};
-
-// The browse tree of the player.
-constexpr MenuEntry kCategories[] = {
-        {0x01, 0x01, 0x163}, {0x05, 0x06, 0x105}, {0x06, 0x07, 0x163},
-        {0x07, 0x08, 0x163}, {0x08, 0x09, 0x163}, {0x09, 0x0a, 0x163},
-        {0x0a, 0x0b, 0x163}, {0x0d, 0x0f, 0x163}, {0x0e, 0x13, 0x104},
-        {0x0f, 0x14, 0x106}, {0x10, 0x15, 0x163}, {0x12, 0x17, 0x163},
-        {0x02, 0x02, 0x002}, {0x03, 0x03, 0x003}, {0x04, 0x04, 0x001},
-        {0x0b, 0x0c, 0x063}, {0x11, 0x05, 0x063}, {0x13, 0x16, 0x063},
-        {0x14, 0x12, 0x063}, {0x1b, 0x1a, 0x263}, {0x18, 0x11, 0x063},
-        {0x16, 0x1b, 0x063},
-};
-
-// The sort menu of the player.
-constexpr MenuEntry kSortMenu[] = {
-        {0x01, 0x06, 0x001}, {0x15, 0x07, 0x001}, {0x0e, 0x08, 0x001},
-        {0x08, 0x09, 0x001}, {0x09, 0x0a, 0x001}, {0x0a, 0x0b, 0x001},
-        {0x0f, 0x0d, 0x001}, {0x0d, 0x0f, 0x001}, {0x17, 0x10, 0x001},
-        {0x16, 0x11, 0x001}, {0x19, 0x00, 0x100}, {0x1a, 0x01, 0x200},
-        {0x02, 0x02, 0x302}, {0x03, 0x03, 0x400}, {0x05, 0x04, 0x500},
-        {0x06, 0x05, 0x600}, {0x0b, 0x0c, 0x700},
-};
-
-// The eight colour labels that rekordbox always writes.
-constexpr const char* kColorNames[] = {
-        "Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple",
-};
-
-// U+FFFA and U+FFFB wrap the labels of the browse menu.
-const QString& menuWrapperOpen() {
-    static const QString value = QString::fromUtf8("\xef\xbf\xba");
-    return value;
-}
-const QString& menuWrapperClose() {
-    static const QString value = QString::fromUtf8("\xef\xbf\xbb");
-    return value;
-}
 
 // A stable 28 bit identifier for the track, used where rekordbox stores the
 // id of the content in its master database.
@@ -312,8 +229,8 @@ QByteArray DeviceSqlWriter::build() const {
     for (const ColumnEntry& column : kColumns) {
         db.appendRow(table::kColumns,
                 buildColumnRow(column.id, column.kind,
-                        menuWrapperOpen() + QString::fromLatin1(column.name)
-                                + menuWrapperClose()));
+                        QString::fromUtf8(kMenuWrapperOpen) + QString::fromLatin1(column.name)
+                                + QString::fromUtf8(kMenuWrapperClose)));
     }
     for (const MenuEntry& entry : kCategories) {
         db.appendRow(table::kCategories,

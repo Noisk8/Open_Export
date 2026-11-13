@@ -29,6 +29,22 @@ void ExportController::setStatus(const QString& text) {
     emit statusTextChanged();
 }
 
+void ExportController::setWriteDeviceLibrary(bool enabled) {
+    if (m_writeDeviceLibrary == enabled) {
+        return;
+    }
+    m_writeDeviceLibrary = enabled;
+    emit optionsChanged();
+}
+
+void ExportController::setIncremental(bool enabled) {
+    if (m_incremental == enabled) {
+        return;
+    }
+    m_incremental = enabled;
+    emit optionsChanged();
+}
+
 void ExportController::exportTo(const QVariant& destination) {
     if (m_running) {
         return;
@@ -53,6 +69,8 @@ void ExportController::exportTo(const QVariant& destination) {
 
     device::ExportOptions options;
     options.destination = target.absoluteFilePath();
+    options.writeDeviceLibrary = m_writeDeviceLibrary;
+    options.incremental = m_incremental;
 
     m_running = true;
     m_progress = 0;

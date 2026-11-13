@@ -4,12 +4,13 @@ Aplicación de escritorio **open source** para analizar música y preparar
 memorias USB compatibles con reproductores **Pioneer DJ** (formato rekordbox),
 sin depender de rekordbox.
 
-**Estado: Fase 4–6.** La biblioteca SQLite, la importación, el análisis musical
-(BPM, tonalidad, beat grid y waveform), el escritor DeviceSQL con sus veinte
-tablas, las listas de reproducción, la detección de memorias USB y la
-validación de la exportación ya funcionan. Falta el soporte de la base de datos
-*Device Library Plus*. Ver [docs/compatibility.md](docs/compatibility.md)
-para el estado real de cada funcionalidad.
+**Estado: Fases 1–7 completadas.** Biblioteca SQLite, importación, análisis
+musical (BPM, tonalidad, beat grid y waveform), editor de cues y loops,
+`export.pdb` (DeviceSQL), `exportLibrary.db` (OneLibrary / Device Library Plus
+cifrado con SQLCipher 4), ANLZ, detección de memorias USB, exportación
+incremental, conversor FLAC → WAV sin pérdida y empaquetado (TGZ/DEB).
+Pendiente únicamente la **validación en hardware real** y `exportExt.pdb`.
+Ver [docs/compatibility.md](docs/compatibility.md) para el estado exacto.
 
 ## Objetivo
 
@@ -21,6 +22,7 @@ Replicar el flujo del modo *EXPORT* de Rekordbox con código propio:
 4. Exportar a una memoria USB detectada automáticamente, generando `export.pdb`
    (DeviceSQL) y los análisis `ANLZ`.
 5. Validar las exportaciones antes de darlas por buenas.
+6. Convertir FLAC a WAV sin pérdida conservando toda la metadata.
 
 > **Importante**: este proyecto **no afirma compatibilidad con hardware** salvo
 > que una exportación haya sido **probada físicamente** en un reproductor. Se
@@ -33,7 +35,8 @@ Replicar el flujo del modo *EXPORT* de Rekordbox con código propio:
 - Qt 6.5+ (Core, Gui, Qml, Quick, QuickControls2, QuickLayouts, Sql, Dialogs).
 - TagLib ≥ 1.12.
 - SQLite3.
-- **FFmpeg** (`ffmpeg` en el `PATH`) para el análisis musical.
+- **FFmpeg** (`ffmpeg` en el `PATH`) para el análisis musical y el conversor.
+- **OpenSSL / libcrypto** (`libssl-dev`) para el cifrado SQLCipher 4.
 
 En Ubuntu/Debian:
 
@@ -42,7 +45,7 @@ sudo apt install cmake ninja-build g++ ffmpeg \
     qt6-base-dev qt6-declarative-dev qt6-tools-dev \
     qml6-module-qtquick qml6-module-qtquick-controls \
     qml6-module-qtquick-layouts qml6-module-qtquick-dialogs \
-    libsqlite3-dev libtag1-dev
+    libsqlite3-dev libtag1-dev libssl-dev
 ```
 
 ## Compilación
@@ -78,11 +81,14 @@ O los ejecutables por separado: `open-deck-tests`, `open-deck-tests-devicesql`,
   (`export.pdb`).
 - `src/export/anlz` — escritor de los ficheros de análisis `.DAT`, `.EXT` y
   `.2EX`.
-- `src/export` — `ExportManager` (escribe el volumen) y `ExportValidator`
-  (lo comprueba con un lector independiente).
-- `src/ui` — interfaz Qt Quick/QML: modelos de biblioteca, listas, dispositivos,
-  análisis y exportación. `AnalysisController` y `ExportController` ejecutan el
-  trabajo pesado en hilos aparte.
+- `src/export/onelibrary` — `DeviceLibraryWriter` (esquema de 22 tablas de
+  OneLibrary) y `SqlCipherWriter` (cifrado SQLCipher 4 con OpenSSL).
+- `src/export` — `ExportManager`, `ExportManifest` (exportación incremental) y
+  `ExportValidator` (relectura independiente).
+- `src/ui` — interfaz Qt Quick/QML: `LibraryController`, `PlaylistController`,
+  `CueController`, `DeviceController`, `AnalysisController`, `ExportController`
+  y `ConversionController`. El análisis, la exportación y la conversión corren
+  en hilos aparte; la ventana del conversor es independiente.
 
 Ver [docs/architecture.md](docs/architecture.md).
 
@@ -140,7 +146,8 @@ Detalle de las etapas:
 | 4 | **Detección USB** | `QStorageInfo` + sysfs: sólo volúmenes FAT32/exFAT cuyo bus sea USB o cuyo disco sea extraíble; se excluyen `/`, `/boot/efi`, loops. Refresco cada 3 s. | `DeviceController` |
 | 5 | **Preparación** | Se unen las pistas de las listas, se asignan ids densos 1..N y se calculan las tres rutas de cada pista. | `ExportManager::buildLibrary` |
 | 6 | **Escritura** | Copia de audio, ficheros ANLZ, carátulas y `export.pdb`, en segundo plano con progreso y cancelación. | `ExportWorker` → `ExportManager::write` |
-| 7 | **Validación** | Un lector independiente vuelve a leer `export.pdb` y comprueba rutas, jerarquía, entradas y que existan audio y ANLZ. | `ExportValidator` |
+| 7 | **Validación** | Un lector independiente vuelve a leer `export.pdb` y comprueba rutas, jerarquía, entradas y que existan audio y ANLZ; además descifra y consulta `exportLibrary.db`. | `ExportValidator` |
+| 8 | **Incremental** | Un manifiesto JSON con el hash de cada pista permite reutilizar audio y ANLZ sin cambios y borrar los huérfanos. | `ExportManifest` |
 
 > El análisis es **optativo**: si una pista no se ha analizado, se exporta igual,
 > pero sus ANLZ no llevan `PQTZ` y la waveform sale plana.
@@ -221,7 +228,31 @@ cambiando la extensión del `.DAT` al que apunta `analyze_path`.
   150 columnas por segundo; `PWV4`/`PWV6` a 1200 columnas.
 - `PCOB`/`PCO2` guardan hot cues, memory cues y loops.
 
-### 5. Concurrencia y validación
+### 5. `exportLibrary.db` (OneLibrary / Device Library Plus)
+
+Para los reproductores de 2023 en adelante (CDJ-3000X, XDJ-AZ, OPUS-QUAD,
+OMNIS-DUO) se escribe además una base SQLite **cifrada con SQLCipher 4** con
+22 tablas (`content`, `playlist`, `playlist_content`, `cue`, `artist`, `album`,
+`genre`, `label`, `key`, `color`, `image`, `menuItem`, `category`, `sort`,
+`property`, …). La clave es pública y está documentada por `pyrekordbox`.
+
+El cifrado se implementa con **OpenSSL** (sin depender de la librería
+SQLCipher): página de 4096 bytes con 80 reservados, `PBKDF2-HMAC-SHA512`
+(256000 iteraciones) para la clave AES-256-CBC, una segunda derivación para la
+clave HMAC, IV por página y `HMAC-SHA512(ciphertext || IV || nº de página)`.
+El formato se ha **verificado abriendo el resultado con el CLI real de
+SQLCipher 4.13** (`PRAGMA integrity_check` → `ok`).
+
+### 6. Exportación incremental
+
+`/PIONEER/rekordbox/.open-deck-manifest.json` guarda un hash por pista
+(metadatos + beat grid + cues + waveform + carátula). En la siguiente
+exportación se comparan: las pistas sin cambios no se vuelven a copiar ni a
+analizar, las cambiadas se reescriben y las que desaparecieron se borran.
+`export.pdb` y `exportLibrary.db` se regeneran siempre (son baratos).
+Se activa con la casilla «Exportación incremental» del diálogo.
+
+### 7. Concurrencia y validación
 
 - `ExportManager::buildLibrary()` es lo único que toca SQLite y corre en el
   hilo de la interfaz (~50 ms). `ExportManager::write()` es estático y recibe
@@ -243,7 +274,9 @@ especificaciones públicas, está en
    cada pista con FFmpeg en un hilo de trabajo y guarda BPM, tonalidad,
    beat grid y waveform en SQLite. Hay barra de progreso y estado.
 3. En el panel derecho crea una lista (queda seleccionada sola) y añade pistas
-   con el botón `+` de cada fila.
+   con el botón `+` de cada fila. El botón **«Cues»** de cada pista abre el
+   editor de hot cues, memory cues y loops (posición, duración del loop,
+   color, nombre y comentario).
 4. Pulsa **«Exportar a USB…»**: se abre un selector con las memorias USB
    conectadas (se excluyen los discos internos). Elige una y pulsa
    **«Exportar aquí»**. Si quedan pistas sin analizar, el propio diálogo
@@ -251,8 +284,9 @@ especificaciones públicas, está en
 5. La copia del audio (que puede ser de varios GB a un pendrive FAT32) se hace
    **en segundo plano**: la ventana sigue respondiendo, muestra el progreso
    pista a pista y permite cancelar. Al terminar se valida lo escrito.
-6. «Otra carpeta…» permite exportar a cualquier directorio, por ejemplo para
-   probar sin hardware.
+6. En el diálogo puedes activar/desactivar **Device Library Plus** y la
+   **exportación incremental**. «Otra carpeta…» permite exportar a cualquier
+   directorio, por ejemplo para probar sin hardware.
 
 > Para probar en un CDJ real: formatea el USB en **FAT32/MBR**
 > (`mkfs.fat -F 32 -S 512`) y selecciónalo en el diálogo.
@@ -273,18 +307,46 @@ Es una **estimación propia**, no un análisis de rekordbox: suficiente para que
 un reproductor muestre beat grid, tonalidad y forma de onda, pero no idéntica
 a la de Pioneer.
 
+## Conversión FLAC → WAV
+
+El botón **«Convertir FLAC → WAV»** abre una **ventana independiente** con su
+propia cola de archivos (arrastrar, añadir archivos o una carpeta) y carpeta de
+destino. Cada conversión:
+
+1. Lee con TagLib el *sample rate*, los canales y la **profundidad de bits**
+   del FLAC, y decide el codec PCM (`pcm_s16le` / `pcm_s24le` / `pcm_s32le`).
+2. Ejecuta `ffmpeg` con `-map_metadata 0`, sin resampleo, sin dithering y sin
+   paso con pérdida.
+3. Reescribe **todos** los tags (incluidas claves Vorbis arbitrarias e ISRC)
+   y la carátula embebida en el WAV mediante TagLib (ID3v2 / INFO).
+4. **Verifica que es bit-exact**: decodifica el FLAC y el WAV a PCM `f64le` y
+   compara sus SHA-256. Si no coinciden, marca el archivo como error.
+
+Todo corre en un hilo aparte, con progreso, cancelación y estado por archivo.
+Verificado en `tests/unit/test_conversion.cpp` con un FLAC real con metadata.
+
+## Empaquetado
+
+```sh
+./scripts/release.sh                 # build Release + tests + TGZ y DEB
+./scripts/release.sh build-release   # directorio de build alternativo
+```
+
+`cmake/Packaging.cmake` instala el binario, el `.desktop`, el icono SVG y la
+documentación, y configura CPack (TGZ + DEB). `include(cmake/Packaging.cmake)`
+se ejecuta al final del `CMakeLists.txt`.
+
 ## Limitaciones actuales
 
 - Importa metadatos (título, artista, álbum, género, año, duración, sample
   rate, profundidad, bitrate, canales) y los guarda en SQLite con
   deduplicación por hash SHA-256.
-- **No** escribe `exportLibrary.db` (Device Library Plus), que es donde
-  rekordbox 7 guarda las listas. Las listas se escriben en `export.pdb`, que es
-  lo que leen los CDJ-2000NXS2, CDJ-3000 y los XDJ-RX.
-- Los hot cues, memory cues y loops se escriben en ANLZ si existen en la
-  biblioteca (tabla `track_cues`), pero todavía no hay interfaz para crearlos.
-- La importación es síncrona; el análisis y la exportación pesada van en hilos
-  de trabajo, con progreso y cancelación.
+- Se escriben **los dos formatos**: `export.pdb` (CDJ-2000NXS2, CDJ-3000,
+  XDJ-RX) y `exportLibrary.db` (CDJ-3000X, XDJ-AZ, OPUS-QUAD, OMNIS-DUO).
+- `exportExt.pdb` (My Tags / menús extendidos) todavía no se genera; ningún
+  reproductor lo necesita para leer las listas.
+- La importación es síncrona; el análisis, la exportación y la conversión van
+  en hilos de trabajo con progreso y cancelación.
 - Una exportación a un USB lento puede tardar minutos: mientras tanto la
   interfaz sigue activa y muestra el avance.
 
@@ -292,11 +354,13 @@ a la de Pioneer.
 
 1. ✅ Fase 1 — proyecto, UI, drag & drop, SQLite, importación de metadatos.
 2. ✅ Fase 2 — BPM, tonalidad, beatgrid y waveform (con FFmpeg).
-3. ⏳ Fase 3 — cues y loops en la interfaz.
+3. ✅ Fase 3 — editor de hot cues, memory cues y loops en la interfaz.
 4. ✅ Fase 4 — escritor DeviceSQL (`export.pdb`) con las veinte tablas.
 5. ✅ Fase 5 — escritor ANLZ (`.DAT`, `.EXT`, `.2EX`).
 6. ✅ Fase 6 — detección de memorias USB y validación de la exportación.
-7. ⏳ Fase 7 — Device Library Plus, exportación incremental, empaquetado.
+7. ✅ Fase 7 — Device Library Plus (SQLCipher 4), exportación incremental,
+   empaquetado TGZ/DEB y conversor FLAC → WAV sin pérdida.
+8. ⏳ Fase 8 — `exportExt.pdb`, hot cue banks y **pruebas en hardware real**.
 
 ## Licencia
 

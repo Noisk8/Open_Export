@@ -96,3 +96,22 @@ DeviceSQL/ANLZ se usan especificaciones públicas y fixtures con licencia:
 
 Toda estructura binaria escrita debe estar respaldada por una especificación o
 una prueba de ingeniería inversa verificable, y documentarse en `docs/`.
+
+
+## OneLibrary, incremental y conversor
+
+* `SqlCipherWriter` implementa el formato de página de SQLCipher 4 con
+  `OpenSSL::Crypto` (sin enlazar `libsqlcipher`). `tests/unit/test_onelibrary.cpp`
+  comprueba el round-trip cifrado/descifrado, la detección de HMAC alterado y
+  el esquema de 22 tablas. El formato se ha verificado además con el CLI real
+  de SQLCipher 4.13.
+* `ExportManifest` guarda hashes por pista. `tests/integration/test_incremental.cpp`
+  comprueba que la segunda exportación no recopia nada, que un cambio de BPM
+  fuerza una sola reescritura y que las pistas eliminadas se borran.
+* `ConversionController` / `ConversionWorker` convierten FLAC → WAV en un hilo
+  aparte. `tests/unit/test_conversion.cpp` genera un FLAC real con ffmpeg,
+  comprueba que el PCM decodificado de ambos ficheros tiene el mismo SHA-256
+  y que los tags (incluido ISRC) sobreviven al WAV.
+* Todos los workers usan el mismo patrón: flag de cancelación atómico en el
+  controlador + `QPointer` al worker, para evitar el *use-after-free* de
+  `deleteLater` (ver la sección «Hilos de trabajo»).

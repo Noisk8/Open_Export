@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Open Deck Export
+GenericName=Rekordbox USB Export Tool
+Comment=Prepare USB drives for Pioneer DJ players without rekordbox
+Exec=open-deck-export
+Icon=open-deck-export
+Terminal=false
+Categories=AudioVideo;Audio;Music;Qt;
+Keywords=rekordbox;dj;pioneer;cdj;
+StartupNotify=true

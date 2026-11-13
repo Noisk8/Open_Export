@@ -7,6 +7,8 @@
 
 #include "library/DatabaseManager.h"
 #include "ui/AnalysisController.h"
+#include "ui/ConversionController.h"
+#include "ui/CueController.h"
 #include "ui/DeviceController.h"
 #include "ui/ExportController.h"
 #include "ui/LibraryController.h"
@@ -39,6 +41,8 @@ int main(int argc, char* argv[]) {
     opendeck::ui::LibraryController library(dbManager);
     opendeck::ui::PlaylistController playlists(dbManager);
     opendeck::ui::DeviceController devices;
+    opendeck::ui::CueController cues(dbManager);
+    opendeck::ui::ConversionController converter;
     opendeck::ui::AnalysisController analysis(dbManager);
     opendeck::ui::ExportController exporter(playlists);
 
@@ -50,6 +54,8 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("library"), &library);
     engine.rootContext()->setContextProperty(QStringLiteral("playlists"), &playlists);
     engine.rootContext()->setContextProperty(QStringLiteral("devices"), &devices);
+    engine.rootContext()->setContextProperty(QStringLiteral("cues"), &cues);
+    engine.rootContext()->setContextProperty(QStringLiteral("converter"), &converter);
     engine.rootContext()->setContextProperty(QStringLiteral("analysis"), &analysis);
     engine.rootContext()->setContextProperty(QStringLiteral("exporter"), &exporter);
     engine.loadFromModule("OpenDeckExport", "Main");

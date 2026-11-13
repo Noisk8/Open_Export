@@ -4,8 +4,14 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QTemporaryDir>
+#include <QUuid>
 
 #include "export/devicesql/DeviceSqlReader.h"
+#include "export/onelibrary/SqlCipherWriter.h"
 
 namespace opendeck {
 namespace device {
@@ -172,6 +178,12 @@ bool ExportValidator::validateExport(const QString& exportRoot, QStringList* iss
 
     ok = validateDatabase(data, issues) && ok;
 
+    // OneLibrary is optional, but when present it must be readable.
+    const QString dlpPath = exportRoot + QStringLiteral("/PIONEER/rekordbox/exportLibrary.db");
+    if (QFileInfo::exists(dlpPath)) {
+        ok = validateDeviceLibrary(dlpPath, issues) && ok;
+    }
+
     // The analysis files of every track have to be where the database says.
     const DeviceSqlReader reader(data);
     if (reader.isValid()) {
@@ -197,6 +209,56 @@ bool ExportValidator::validateExport(const QString& exportRoot, QStringList* iss
         }
     }
 
+    return ok;
+}
+
+bool ExportValidator::validateDeviceLibrary(const QString& databasePath, QStringList* issues) {
+    QTemporaryDir dir;
+    if (!dir.isValid()) {
+        addIssue(issues, QStringLiteral("No se pudo crear un directorio temporal"));
+        return false;
+    }
+    const QString plainPath = dir.path() + QStringLiteral("/exportLibrary.db");
+    QString error;
+    if (!onelibrary::SqlCipherWriter::decryptFile(databasePath, plainPath, &error)) {
+        addIssue(issues, QStringLiteral("exportLibrary.db: %1").arg(error));
+        return false;
+    }
+
+    bool ok = true;
+    const QString connection =
+            QStringLiteral("ode_validate_dlp_%1")
+                    .arg(QUuid::createUuid().toString(QUuid::Id128));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(plainPath);
+        if (!db.open()) {
+            addIssue(issues, QStringLiteral("exportLibrary.db: %1")
+                                     .arg(db.lastError().text()));
+            ok = false;
+        } else {
+            QSqlQuery query(db);
+            const QStringList tables = {
+                    QStringLiteral("content"), QStringLiteral("playlist"),
+                    QStringLiteral("playlist_content"), QStringLiteral("cue"),
+                    QStringLiteral("menuItem"), QStringLiteral("category"),
+                    QStringLiteral("sort"), QStringLiteral("property")};
+            for (const QString& table : tables) {
+                if (!query.exec(QStringLiteral("SELECT count(*) FROM %1").arg(table))) {
+                    addIssue(issues, QStringLiteral("exportLibrary.db: falta la tabla %1")
+                                             .arg(table));
+                    ok = false;
+                }
+            }
+            if (query.exec(QStringLiteral("PRAGMA integrity_check")) && query.next()
+                    && query.value(0).toString() != QStringLiteral("ok")) {
+                addIssue(issues, QStringLiteral("exportLibrary.db: integrity_check falló"));
+                ok = false;
+            }
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(connection);
     return ok;
 }
 

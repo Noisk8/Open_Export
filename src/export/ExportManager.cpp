@@ -1,5 +1,6 @@
 #include "export/ExportManager.h"
 
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDebug>
 #include <QDir>
@@ -12,8 +13,10 @@
 
 #include <stdexcept>
 
+#include "export/ExportManifest.h"
 #include "export/anlz/AnlzWriter.h"
 #include "export/devicesql/DeviceSqlWriter.h"
+#include "export/onelibrary/DeviceLibraryWriter.h"
 #include "library/ArtworkExtractor.h"
 #include "library/DatabaseManager.h"
 #include "library/TrackRepository.h"
@@ -218,12 +221,57 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         }
 
         const QString root = target.absoluteFilePath();
+        const QString createdDate = QDate::currentDate().toString(Qt::ISODate);
 
-        // --- Copy the audio and write the analysis --------------------------
+        // A previous export lets the incremental mode reuse unchanged files.
+        const ExportManifest previous =
+                options.incremental ? ExportManifest::load(root, error) : ExportManifest();
+        ExportManifest next;
+        next.valid = true;
+        next.version = ExportManifest::kVersion;
+        next.createdDate = createdDate;
+        next.libraryDigest = ExportManifest::libraryHash(library);
+
+        // --- Artwork ids are assigned up front -------------------------------
+        // They must not depend on which tracks the incremental mode skips, or
+        // the rows of export.pdb / exportLibrary.db would point at the wrong
+        // image on the next run.
+        QHash<qint64, QByteArray> artworkBytes;
         QHash<qint64, quint32> artworkIds;
         QHash<qint64, QString> artworkPaths;
+        QHash<QByteArray, quint32> seenArtwork;
         quint32 nextArtworkId = 1;
+        if (options.writeArtwork) {
+            for (const ExportTrack& item : library.tracks) {
+                const QList<library::EmbeddedArtwork> artwork =
+                        library::readEmbeddedArtwork(item.track.filePath);
+                for (const library::EmbeddedArtwork& image : artwork) {
+                    if (!image.mimeType.contains(QStringLiteral("jpeg"))
+                            && !image.mimeType.contains(QStringLiteral("jpg"))) {
+                        continue;
+                    }
+                    const QByteArray key =
+                            QCryptographicHash::hash(image.data, QCryptographicHash::Sha256);
+                    quint32 id = 0;
+                    const auto it = seenArtwork.constFind(key);
+                    if (it != seenArtwork.constEnd()) {
+                        id = it.value();
+                    } else {
+                        id = nextArtworkId++;
+                        seenArtwork.insert(key, id);
+                    }
+                    artworkIds.insert(item.track.id, id);
+                    artworkBytes.insert(item.track.id, image.data);
+                    const QString folder = QStringLiteral("/PIONEER/Artwork/%1")
+                            .arg((id - 1) / 20 + 1, 5, 10, QChar('0'));
+                    artworkPaths.insert(item.track.id,
+                            folder + QStringLiteral("/a%1.jpg").arg(id));
+                    break;
+                }
+            }
+        }
 
+        // --- Copy the audio and write the analysis --------------------------
         for (int index = 0; index < library.tracks.size(); ++index) {
             const ExportTrack& item = library.tracks.at(index);
             const core::Track& track = item.track;
@@ -242,12 +290,24 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
                         item.fileName);
             }
 
+            const QString trackDigest = ExportManifest::trackHash(item);
+            next.tracks.insert(item.devicePath, trackDigest);
+            const QString audioTarget = root + item.devicePath;
+            const QString anlzTarget = root + item.analyzePath;
+            const bool reusable = previous.valid
+                    && previous.tracks.value(item.devicePath) == trackDigest
+                    && (!options.copyAudio || QFile::exists(audioTarget))
+                    && (!options.writeAnalysis || QFile::exists(anlzTarget));
+            if (reusable) {
+                ++report.skippedTracks;
+                continue;
+            }
+
             if (options.copyAudio) {
-                const QString destination = root + item.devicePath;
-                QDir().mkpath(QFileInfo(destination).absolutePath());
+                QDir().mkpath(QFileInfo(audioTarget).absolutePath());
                 // An export may be written over a previous one.
-                QFile::remove(destination);
-                if (!QFile::copy(track.filePath, destination)) {
+                QFile::remove(audioTarget);
+                if (!QFile::copy(track.filePath, audioTarget)) {
                     throw std::runtime_error("No se pudo copiar " + track.filePath.toStdString());
                 }
             }
@@ -271,31 +331,30 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
                 ++report.analysisCount;
             }
 
-            if (options.writeArtwork && !artworkIds.contains(track.id)) {
-                const QList<library::EmbeddedArtwork> artwork =
-                        library::readEmbeddedArtwork(track.filePath);
-                for (const library::EmbeddedArtwork& image : artwork) {
-                    if (!image.mimeType.contains(QStringLiteral("jpeg"))
-                            && !image.mimeType.contains(QStringLiteral("jpg"))) {
-                        continue;
-                    }
-                    const quint32 id = nextArtworkId++;
-                    const QString folder = QStringLiteral("/PIONEER/Artwork/%1")
-                            .arg((id - 1) / 20 + 1, 5, 10, QChar('0'));
-                    const QString path = root + folder
-                            + QStringLiteral("/a%1.jpg").arg(id);
-                    if (writeArtworkFile(path, image.data)) {
-                        artworkIds.insert(track.id, id);
-                        artworkPaths.insert(track.id, folder
-                                + QStringLiteral("/a%1.jpg").arg(id));
-                        ++report.artworkCount;
-                    }
-                    break;
+            if (artworkBytes.contains(track.id)) {
+                const QString path = root + artworkPaths.value(track.id);
+                if (writeArtworkFile(path, artworkBytes.value(track.id))) {
+                    ++report.artworkCount;
                 }
             }
         }
 
-        // --- The DeviceSQL database -----------------------------------------
+        // --- Remove the files of tracks that are no longer exported -----------
+        if (previous.valid) {
+            for (auto it = previous.tracks.constBegin(); it != previous.tracks.constEnd(); ++it) {
+                if (next.tracks.contains(it.key())) {
+                    continue;
+                }
+                QFile::remove(root + it.key());
+                const QString directory = root + AnlzWriter::analysisDirectory(it.key());
+                QFile::remove(directory + QStringLiteral("/ANLZ0000.DAT"));
+                QFile::remove(directory + QStringLiteral("/ANLZ0000.EXT"));
+                QFile::remove(directory + QStringLiteral("/ANLZ0000.2EX"));
+                ++report.removedTracks;
+            }
+        }
+
+        // --- Both databases --------------------------------------------------
         ExportLibrary prepared = library;
         for (ExportTrack& item : prepared.tracks) {
             item.artworkId = artworkIds.value(item.track.id, 0);
@@ -304,11 +363,24 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
 
         DeviceSqlWriter writer;
         writer.setLibrary(prepared);
-        writer.setCreationDate(QDate::currentDate().toString(Qt::ISODate));
-        const QByteArray database = writer.build();
+        writer.setCreationDate(createdDate);
+        writeFile(root + QStringLiteral("/PIONEER/rekordbox/export.pdb"), writer.build());
 
-        const QString databasePath = root + QStringLiteral("/PIONEER/rekordbox/export.pdb");
-        writeFile(databasePath, database);
+        if (options.writeDeviceLibrary) {
+            QString dlpError;
+            if (!onelibrary::DeviceLibraryWriter::write(
+                        root + QStringLiteral("/PIONEER/rekordbox/exportLibrary.db"),
+                        prepared, createdDate, &dlpError)) {
+                throw std::runtime_error("Device Library Plus: "
+                        + dlpError.toStdString());
+            }
+        }
+
+        // Save the manifest even for a full export: the next one can reuse it.
+        QString manifestError;
+        if (!next.save(root, &manifestError)) {
+            report.warnings.append(manifestError);
+        }
 
         report.trackCount = static_cast<int>(prepared.tracks.size());
         report.playlistCount = static_cast<int>(prepared.playlists.size());

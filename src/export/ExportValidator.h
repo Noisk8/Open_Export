@@ -20,6 +20,10 @@ class ExportValidator {
 
     // Validates the content of an `export.pdb`.
     static bool validateDatabase(const QByteArray& data, QStringList* issues);
+
+    // Decrypts an `exportLibrary.db` (OneLibrary / SQLCipher 4) and checks its
+    // schema and row counts with an independent SQLite connection.
+    static bool validateDeviceLibrary(const QString& databasePath, QStringList* issues);
 };
 
 } // namespace device

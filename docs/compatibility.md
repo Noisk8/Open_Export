@@ -24,7 +24,7 @@ Estados posibles:
 | Generación de beatgrid | `STRUCTURALLY_VALIDATED` |
 | Generación de waveform | `STRUCTURALLY_VALIDATED` (150 columnas/s) |
 | Análisis en segundo plano | `STRUCTURALLY_VALIDATED` |
-| Hot cues / memory cues / loops | `NOT_IMPLEMENTED` en la interfaz; el ANLZ los escribe si existen en la BD |
+| Hot cues / memory cues / loops | `STRUCTURALLY_VALIDATED` (editor en UI + ANLZ + OneLibrary) |
 | Playlists (modelo, repositorio, interfaz) | `EXPERIMENTAL` |
 | `export.pdb` (DeviceSQL, veinte tablas) | `STRUCTURALLY_VALIDATED` |
 | `export.pdb` — tabla de pistas con metadatos | `STRUCTURALLY_VALIDATED` |
@@ -39,6 +39,10 @@ Estados posibles:
 | Detección de memorias USB conectadas | `STRUCTURALLY_VALIDATED` |
 | Exportación en segundo plano (progreso y cancelación) | `STRUCTURALLY_VALIDATED` |
 | Validación de exportaciones | `STRUCTURALLY_VALIDATED` |
+| Exportación incremental | `STRUCTURALLY_VALIDATED` |
+| Conversión FLAC → WAV sin pérdida | `STRUCTURALLY_VALIDATED` |
+| Empaquetado TGZ / DEB | `STRUCTURALLY_VALIDATED` |
+| `exportLibrary.db` (OneLibrary / Device Library Plus) | `STRUCTURALLY_VALIDATED` (abierto con SQLCipher 4.13 real) |
 | `exportExt.pdb` (My Tags) | `NOT_IMPLEMENTED` |
 | `exportLibrary.db` (Device Library Plus) | `NOT_IMPLEMENTED` |
 

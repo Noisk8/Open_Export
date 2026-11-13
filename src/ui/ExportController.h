@@ -22,6 +22,10 @@ class ExportController : public QObject {
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
     Q_PROPERTY(int progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
+    // Fase 7: OneLibrary y exportación incremental.
+    Q_PROPERTY(bool writeDeviceLibrary READ writeDeviceLibrary WRITE setWriteDeviceLibrary
+               NOTIFY optionsChanged)
+    Q_PROPERTY(bool incremental READ incremental WRITE setIncremental NOTIFY optionsChanged)
   public:
     explicit ExportController(PlaylistController& playlists, QObject* parent = nullptr);
     ~ExportController() override;
@@ -29,6 +33,10 @@ class ExportController : public QObject {
     [[nodiscard]] bool running() const { return m_running; }
     [[nodiscard]] int progress() const { return m_progress; }
     [[nodiscard]] QString statusText() const { return m_statusText; }
+    [[nodiscard]] bool writeDeviceLibrary() const { return m_writeDeviceLibrary; }
+    [[nodiscard]] bool incremental() const { return m_incremental; }
+    void setWriteDeviceLibrary(bool enabled);
+    void setIncremental(bool enabled);
 
     Q_INVOKABLE void exportTo(const QVariant& destination);
     Q_INVOKABLE void cancel();
@@ -37,6 +45,7 @@ class ExportController : public QObject {
     void runningChanged();
     void progressChanged();
     void statusTextChanged();
+    void optionsChanged();
     void finished(bool ok, const QString& message);
 
   private slots:
@@ -54,6 +63,8 @@ class ExportController : public QObject {
     QAtomicInteger<bool> m_cancelRequested{false};
     bool m_running = false;
     int m_progress = 0;
+    bool m_writeDeviceLibrary = true;
+    bool m_incremental = false;
     QString m_statusText;
 };
 

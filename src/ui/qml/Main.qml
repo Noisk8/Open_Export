@@ -106,7 +106,8 @@ ApplicationWindow {
                     font.bold: true
                     Layout.fillWidth: true
                 }
-                Button {
+                OdeButton {
+                    Layout.preferredHeight: 34
                     text: "Actualizar"
                     onClicked: devices.refresh()
                 }
@@ -134,7 +135,8 @@ ApplicationWindow {
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
                     }
-                    Button {
+                    OdeButton {
+                        Layout.preferredHeight: 30
                         text: analysis.running ? "Analizando…" : "Analizar ahora"
                         enabled: !analysis.running && analysis.ffmpegAvailable
                         onClicked: analysis.analyzeAll()
@@ -174,66 +176,265 @@ ApplicationWindow {
                 spacing: 6
                 delegate: Rectangle {
                     width: ListView.view.width
-                    height: 78
+                    height: 76
                     radius: 6
                     color: window.raised
                     border.color: model.fat32 ? window.success : window.warning
                     border.width: 1
-                    ColumnLayout {
+                    RowLayout {
                         anchors.fill: parent
                         anchors.margins: 10
-                        spacing: 3
-                        RowLayout {
+                        spacing: 10
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            Text {
-                                text: "▣  " + model.name
-                                color: window.textPrimary
-                                font.pixelSize: 14
-                                font.bold: true
+                            spacing: 3
+                            RowLayout {
                                 Layout.fillWidth: true
+                                Text {
+                                    text: "▣  " + model.name
+                                    color: window.textPrimary
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    text: model.fat32 ? "FAT32" : model.fileSystem.toUpperCase()
+                                    color: model.fat32 ? window.success : window.warning
+                                    font.pixelSize: 11
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: model.summary
+                                color: window.textSecondary
+                                font.pixelSize: 11
                                 elide: Text.ElideRight
                             }
-                            Text {
-                                text: model.fat32 ? "FAT32" : model.fileSystem.toUpperCase()
-                                color: model.fat32 ? window.success : window.warning
-                                font.pixelSize: 11
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: model.summary
-                            color: window.textSecondary
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
                             Text {
                                 text: model.writable ? "Escribible" : "Sólo lectura"
                                 color: model.writable ? window.textSecondary : window.accent
                                 font.pixelSize: 11
-                                Layout.fillWidth: true
                             }
-                            Button {
-                                text: "Exportar aquí"
-                                enabled: model.writable
-                                onClicked: window.doExport(model.rootPath)
-                            }
+                        }
+                        OdeButton {
+                            Layout.preferredWidth: 132
+                            Layout.preferredHeight: 34
+                            Layout.alignment: Qt.AlignVCenter
+                            text: "Exportar aquí"
+                            primary: true
+                            enabled: model.writable
+                            onClicked: window.doExport(model.rootPath)
                         }
                     }
                 }
             }
 
+            // Fase 7: both formats and incremental export are optional.
+            OdeCheckBox {
+                Layout.fillWidth: true
+                text: "Device Library Plus (exportLibrary.db para reproductores 2023+)"
+                checked: exporter.writeDeviceLibrary
+                onToggled: exporter.writeDeviceLibrary = checked
+            }
+            OdeCheckBox {
+                Layout.fillWidth: true
+                text: "Exportación incremental (reutilizar audio y ANLZ sin cambios)"
+                checked: exporter.incremental
+                onToggled: exporter.incremental = checked
+            }
+
             RowLayout {
                 Layout.fillWidth: true
-                Button {
+                spacing: 8
+                OdeButton {
+                    Layout.preferredWidth: 140
+                    Layout.preferredHeight: 34
                     text: "Otra carpeta…"
                     onClicked: { devicePopup.close(); folderDialog.open() }
                 }
                 Item { Layout.fillWidth: true }
-                Button {
+                OdeButton {
+                    Layout.preferredWidth: 90
+                    Layout.preferredHeight: 34
                     text: "Cerrar"
                     onClicked: devicePopup.close()
+                }
+            }
+        }
+    }
+
+    // Fase 3: hot cues, memory cues and loops of the selected track.
+    Popup {
+        id: cuePopup
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(640, window.width - 40)
+        height: Math.min(520, window.height - 40)
+        modal: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        property string trackName: ""
+        background: Rectangle {
+            radius: 8
+            color: window.panel
+            border.color: window.border
+            border.width: 1
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: "CUES · " + cuePopup.trackName
+                    color: window.textPrimary
+                    font.pixelSize: 14
+                    font.bold: true
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+                Text {
+                    text: cues.cueCount + " cues"
+                    color: window.textSecondary
+                    font.pixelSize: 11
+                }
+                OdeButton {
+                    Layout.preferredWidth: 80
+                    Layout.preferredHeight: 30
+                    text: "Cerrar"
+                    onClicked: cuePopup.close()
+                }
+            }
+
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: cues
+                spacing: 4
+                delegate: Rectangle {
+                    width: ListView.view.width
+                    height: 44
+                    radius: 5
+                    color: window.raised
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 10
+                        Rectangle {
+                            Layout.preferredWidth: 66
+                            Layout.preferredHeight: 22
+                            radius: 4
+                            color: "#101114"
+                            Text {
+                                anchors.centerIn: parent
+                                text: model.label
+                                color: model.kind === 0 ? window.accent : window.success
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                        }
+                        Text {
+                            text: cues.timeLabel(model.time)
+                                  + (model.kind === 2 ? " → " + cues.timeLabel(model.loopTime) : "")
+                            color: window.textPrimary
+                            font.pixelSize: 12
+                            Layout.preferredWidth: 130
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: model.comment || model.name || "—"
+                            color: window.textSecondary
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        OdeButton {
+                            Layout.preferredWidth: 32
+                            Layout.preferredHeight: 28
+                            text: "✕"
+                            onClicked: cues.removeCue(index)
+                        }
+                    }
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: window.border }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 4
+                rowSpacing: 6
+                columnSpacing: 8
+
+                ComboBox {
+                    id: cueKind
+                    Layout.fillWidth: true
+                    model: ["Hot cue", "Memory cue", "Loop"]
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
+                    contentItem: Text { text: cueKind.displayText; color: window.textPrimary; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
+                }
+                ComboBox {
+                    id: cueHotNumber
+                    Layout.fillWidth: true
+                    visible: cueKind.currentIndex === 0
+                    model: ["A", "B", "C", "D", "E", "F", "G", "H"]
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
+                    contentItem: Text { text: cueHotNumber.displayText; color: window.textPrimary; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
+                }
+                ComboBox {
+                    id: cueColor
+                    Layout.fillWidth: true
+                    model: ["Sin color", "Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple"]
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
+                    contentItem: Text { text: cueColor.displayText; color: window.textPrimary; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
+                }
+                OdeButton {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 32
+                    text: "Añadir cue"
+                    primary: true
+                    onClicked: {
+                        const t = parseFloat(cueTime.text)
+                        const end = parseFloat(cueLoopEnd.text)
+                        const kind = cueKind.currentIndex
+                        const hot = kind === 0 ? cueHotNumber.currentIndex + 1 : 0
+                        if (!isFinite(t) || t < 0) { window.setStatus("Tiempo inválido", false); return }
+                        cues.addCue(kind, t, kind === 2 && isFinite(end) ? end : t,
+                                    hot, cueColor.currentIndex, cueName.text, cueComment.text)
+                        cueTime.text = ""; cueLoopEnd.text = ""; cueName.text = ""; cueComment.text = ""
+                    }
+                }
+
+                TextField {
+                    id: cueTime
+                    Layout.fillWidth: true
+                    placeholderText: "Tiempo (s)"
+                    color: window.textPrimary
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
+                }
+                TextField {
+                    id: cueLoopEnd
+                    Layout.fillWidth: true
+                    visible: cueKind.currentIndex === 2
+                    placeholderText: "Fin del loop (s)"
+                    color: window.textPrimary
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
+                }
+                TextField {
+                    id: cueName
+                    Layout.fillWidth: true
+                    placeholderText: "Nombre"
+                    color: window.textPrimary
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
+                }
+                TextField {
+                    id: cueComment
+                    Layout.fillWidth: true
+                    placeholderText: "Comentario"
+                    color: window.textPrimary
+                    background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
                 }
             }
         }
@@ -287,8 +488,9 @@ ApplicationWindow {
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
                 }
-                Button {
+                OdeButton {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 34
                     text: analysis.running ? "Analizando…" : "Analizar biblioteca"
                     enabled: !analysis.running && !exporter.running
                              && analysis.pendingCount > 0 && analysis.ffmpegAvailable
@@ -326,24 +528,20 @@ ApplicationWindow {
                     horizontalAlignment: Text.AlignHCenter
                 }
 
-                Button {
+                OdeButton {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 40
                     text: exporter.running ? "Exportando…" : "Exportar a USB…"
+                    primary: true
                     enabled: playlists.totalTrackCount > 0 && !exporter.running && !analysis.running
-                    background: Rectangle {
-                        radius: 6
-                        color: parent.enabled ? window.accent : "#3A2020"
-                    }
-                    contentItem: Text {
-                        text: parent.text
-                        color: "white"
-                        font.pixelSize: 13
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
                     onClicked: { devices.refresh(); devicePopup.open() }
+                }
+
+                OdeButton {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 34
+                    text: "Convertir FLAC → WAV"
+                    onClicked: converterWindow.show()
                 }
 
                 // Progress of the background export, so the window never looks
@@ -369,8 +567,9 @@ ApplicationWindow {
                     font.pixelSize: 10
                     wrapMode: Text.WordWrap
                 }
-                Button {
+                OdeButton {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 34
                     visible: exporter.running
                     text: "Cancelar exportación"
                     onClicked: exporter.cancel()
@@ -500,6 +699,7 @@ ApplicationWindow {
                     Text { text: "Dur."; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 56; visible: window.showDetails }
                     Text { text: "Estado"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 72; visible: window.showDetails }
                     Text { text: "+"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 40; horizontalAlignment: Text.AlignHCenter }
+                    Text { text: "Cues"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 48; horizontalAlignment: Text.AlignHCenter }
                 }
 
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
@@ -534,7 +734,7 @@ ApplicationWindow {
                                 Layout.preferredWidth: 72
                                 visible: window.showDetails
                             }
-                            Button {
+                            OdeButton {
                                 Layout.preferredWidth: 36
                                 Layout.preferredHeight: 30
                                 text: "+"
@@ -543,23 +743,22 @@ ApplicationWindow {
                                 ToolTip.text: enabled
                                     ? "Añadir a «" + window.selectedPlaylistName + "»"
                                     : "Selecciona primero una lista a la derecha"
-                                background: Rectangle {
-                                    radius: 4
-                                    color: parent.enabled ? "#3A2020" : raised
-                                    border.color: parent.enabled ? window.accent : border
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: parent.enabled ? window.accent : textSecondary
-                                    font.pixelSize: 18
-                                    font.bold: true
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
                                 onClicked: {
                                     playlists.addTrack(window.selectedPlaylistId, model.trackId)
                                     window.setStatus("Añadida a «" + window.selectedPlaylistName + "»", true)
+                                }
+                            }
+                            OdeButton {
+                                Layout.preferredWidth: 44
+                                Layout.preferredHeight: 30
+                                text: "Cues"
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Editar hot cues, memory cues y loops"
+                                onClicked: {
+                                    cues.setTrack(model.trackId)
+                                    cues.duration = model.duration
+                                    cuePopup.trackName = model.title || model.filePath
+                                    cuePopup.open()
                                 }
                             }
                         }
@@ -718,24 +917,11 @@ ApplicationWindow {
                             }
                         }
                     }
-                    Button {
+                    OdeButton {
                         Layout.preferredWidth: 40
                         Layout.preferredHeight: 36
                         text: "+"
-                        background: Rectangle {
-                            radius: 5
-                            color: "#3A2020"
-                            border.color: window.accent
-                            border.width: 1
-                        }
-                        contentItem: Text {
-                            text: parent.text
-                            color: window.accent
-                            font.pixelSize: 18
-                            font.bold: true
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
+                        primary: true
                         onClicked: {
                             if (newPlaylistName.text.trim().length > 0) {
                                 window.selectedPlaylistId = playlists.createPlaylist(newPlaylistName.text.trim())
@@ -747,5 +933,11 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    // Ventana independiente del conversor FLAC → WAV. Se abre desde la barra
+    // izquierda; no es modal y puede permanecer abierta mientras se exporta.
+    ConverterWindow {
+        id: converterWindow
     }
 }

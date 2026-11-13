@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"
+     width="256" height="256" role="img" aria-label="Open Deck Export">
+  <title>Open Deck Export</title>
+  <desc>Dark DJ platter with a red centre label and an export arrow.</desc>
+
+  <defs>
+    <radialGradient id="platter" cx="40%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#3b3b48"/>
+      <stop offset="100%" stop-color="#1c1c25"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Dark rounded tile -->
+  <rect x="4" y="4" width="248" height="248" rx="52"
+        fill="#14141b" stroke="#2c2c38" stroke-width="4"/>
+
+  <!-- DJ platter / vinyl -->
+  <circle cx="128" cy="128" r="88"
+          fill="url(#platter)" stroke="#4b4b59" stroke-width="5"/>
+  <g fill="none" stroke="#50505f" stroke-width="2" opacity="0.55">
+    <circle cx="128" cy="128" r="74"/>
+    <circle cx="128" cy="128" r="62"/>
+    <circle cx="128" cy="128" r="50"/>
+  </g>
+  <!-- Jog-wheel position marker -->
+  <circle cx="128" cy="54" r="6" fill="#8b8b9a"/>
+
+  <!-- Red centre label + spindle hole -->
+  <circle cx="128" cy="128" r="28" fill="#e23b33"/>
+  <circle cx="128" cy="128" r="28" fill="none"
+          stroke="#ff7168" stroke-width="2" opacity="0.6"/>
+  <circle cx="128" cy="128" r="6" fill="#14141b"/>
+
+  <!-- Export arrow: dark halo for contrast, then a bright arrow -->
+  <g transform="rotate(-45 128 128)">
+    <path d="M 138 116 H 180 V 100 L 218 128 L 180 156 V 140 H 138 Z"
+          fill="#14141b" stroke="#14141b" stroke-width="10"
+          stroke-linejoin="round"/>
+    <path d="M 138 116 H 180 V 100 L 218 128 L 180 156 V 140 H 138 Z"
+          fill="#f4f5fa"/>
+  </g>
+</svg>

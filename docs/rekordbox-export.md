@@ -356,14 +356,17 @@ con `PPTH` y waveforms planas y sin `PQTZ`.
 
 ## 5. Lo que todavía no se hace
 
-* **Device Library Plus** (`exportLibrary.db`): es una base de datos SQLite
-  cifrada con SQLCipher. rekordbox 7 escribe ahí las listas de reproducción
-  en vez de en `export.pdb`, y los reproductores más modernos la leen. Para
-  cubrir ambos mundos habría que escribir las listas en los dos sitios.
+* ~~**Device Library Plus** (`exportLibrary.db`)~~ — **implementado**. Se
+  escriben los dos formatos: `export.pdb` para los reproductores clásicos y
+  `exportLibrary.db` (SQLCipher 4, 22 tablas) para los de 2023 en adelante.
+  El cifrado se hace con OpenSSL y se ha verificado abriéndolo con el CLI real
+  de SQLCipher 4.13. Ver la sección «OneLibrary» más abajo.
 * **`exportExt.pdb`**: sólo contiene las etiquetas (*My Tags*); ningún
   reproductor las necesita para leer las listas.
 * **Ajustes del dispositivo** (`MYSETTING.DAT`, etc.): los reproductores los
   leen, pero funcionan con sus valores por defecto si no están.
+* **`exportExt.pdb`** (My Tags / menús extendidos): sin especificación pública
+  completa; ningún reproductor lo necesita para leer las listas.
 * **Estructura de frases** (`PSSI`): opcional, sólo afecta al modo
   iluminación del CDJ-3000.
 * **`PQT2`**: la variante extendida del beat grid; la implementation escribe
@@ -387,3 +390,56 @@ con `PPTH` y waveforms planas y sin `PQTZ`.
   — el desglose byte a byte de una exportación real de rekordbox 7.2.2 que
   motivó several correcciones (la alineación a cuatro bytes de las cadenas
   largas, el esquema de páginas *sentinel* y la tabla 19).
+
+
+## 7. OneLibrary / Device Library Plus (`exportLibrary.db`)
+
+Además del formato DeviceSQL se genera una base SQLite cifrada con **SQLCipher 4**
+en `/PIONEER/rekordbox/exportLibrary.db`. La leen los CDJ-3000X, XDJ-AZ,
+OPUS-QUAD, OMNIS-DUO, djay Pro y Traktor.
+
+### Esquema
+
+22 tablas: `content` (metadatos y rutas de cada pista), `artist`, `album`,
+`genre`, `label`, `key`, `color`, `image`, `cue`, `playlist`,
+`playlist_content`, `history`, `history_content`, `hotCueBankList`,
+`hotCueBankList_cue`, `myTag`, `myTag_content`, `menuItem`, `category`,
+`sort`, `property` y `recommendedLike`. Los ids son enteros secuenciales, el
+BPM se guarda ×100 y las rutas son relativas a la raíz del volumen.
+`property.dbVersion` vale `"1000"`.
+
+### Cifrado SQLCipher 4 (implementado con OpenSSL)
+
+| Parámetro | Valor |
+|---|---|
+| Página | 4096 bytes, 80 reservados |
+| Salt | 16 bytes aleatorios (primeros 16 bytes del fichero) |
+| Clave de cifrado | `PBKDF2-HMAC-SHA512(passphrase, salt, 256000, 32)` |
+| Salt HMAC | cada byte del salt XOR `0x3a` |
+| Clave HMAC | `PBKDF2-HMAC-SHA512(enc_key, hmac_salt, 2, 32)` |
+| Cifrado | AES-256-CBC sin padding, IV aleatorio de 16 bytes por página |
+| HMAC | `HMAC-SHA512(ct || IV || nº_página_u32_LE)` (64 bytes) |
+| Página 1 | los 16 primeros bytes son el salt; se cifran 4000 bytes |
+
+La passphrase es pública y está documentada por `pyrekordbox`:
+`r8gddnr4k847830ar6cqzbkk0el6qytmb3trbbx805jm74vez64i5o8fnrqryqls`.
+
+Para que SQLite deje 80 bytes libres por página se parchea el byte 20 de la
+cabecera del fichero plano y se ejecuta `VACUUM` antes de cifrar (`PRAGMA
+reserve_size` se ignora desde SQL). El resultado se ha validado con el CLI
+`sqlcipher` 4.13: `PRAGMA integrity_check` → `ok` y consultas sobre
+`content`, `playlist`, `menuItem` y `property`.
+
+## 8. Exportación incremental
+
+`/PIONEER/rekordbox/.open-deck-manifest.json` (JSON, ignorado por los
+reproductores) guarda la versión, la fecha, un hash de la estructura de listas
+y un hash por pista que cubre metadatos, carátula, beat grid, cues y waveform.
+
+En una exportación incremental posterior:
+
+* las pistas cuyo hash no cambió (y cuyos ficheros siguen existiendo) **no se
+  vuelven a copiar ni a reanalizar**;
+* las cambiadas se reescriben;
+* las que ya no están en la biblioteca se borran del volumen;
+* `export.pdb` y `exportLibrary.db` se regeneran siempre.
