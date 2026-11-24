@@ -51,6 +51,7 @@ add_library(ode_core STATIC
     src/export/onelibrary/SqlCipherWriter.cpp
     src/export/onelibrary/DeviceLibraryWriter.cpp
     src/export/ExportManifest.cpp
+    src/export/ExportExtensions.cpp
     src/export/ExportManager.cpp
     src/export/ExportValidator.cpp
     src/ui/TrackFilterModel.h

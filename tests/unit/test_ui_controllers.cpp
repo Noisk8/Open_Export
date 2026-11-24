@@ -337,10 +337,33 @@ class TestUiControllers : public QObject {
         QTRY_COMPARE_WITH_TIMEOUT(done.size(), 2, 5000);
         QCOMPARE(f->library->trackCount(), 2);
         QCOMPARE(done.last()[1].toInt(), 1);
+        const auto playlistId = f->playlists->createPlaylist("Dropped tracks");
+        ui::TrackFilterModel view(*f->library, *f->playlists);
+        view.setPlaylistId(playlistId);
+        QCOMPARE(view.count(), 0);
+        connect(f->library.get(), &ui::LibraryController::playlistTracksImported,
+                f->playlists.get(), [lists = f->playlists.get()](qint64 id, const QList<qint64>& tracks) {
+                    QVERIFY(lists->editTracks(id, tracks, false));
+                });
+        const QString newPath = f->dir.path() + "/other.wav";
+        QVERIFY(QFile::copy(path, newPath));
+        QFile other(newPath);
+        QVERIFY(other.open(QIODevice::ReadWrite));
+        QVERIFY(other.seek(other.size() - 1));
+        QCOMPARE(other.write("a", 1), 1);
+        other.close();
+        f->library->importAsync({QUrl::fromLocalFile(path), QUrl::fromLocalFile(newPath)}, playlistId);
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 3, 5000);
+        QCOMPARE(f->library->trackCount(), 3);
+        QCOMPARE(view.count(), 2);
+        library::TrackRepository repository(*f->db);
+        QCOMPARE(f->playlists->trackIds(playlistId),
+                (QList<qint64>{repository.idByPath(path), repository.idByPath(newPath)}));
+
         f->library->importAsync({QUrl::fromLocalFile(path)});
         f->library->cancelImport();
-        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 3, 5000);
-        QCOMPARE(f->library->trackCount(), 2);
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 4, 5000);
+        QCOMPARE(f->library->trackCount(), 3);
     }
 
     void trackOrderAndViewSortAreIndependent() {

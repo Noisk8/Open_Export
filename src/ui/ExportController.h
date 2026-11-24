@@ -27,6 +27,7 @@ class ExportController : public QObject {
     // Fase 7: OneLibrary y exportación incremental.
     Q_PROPERTY(bool writeDeviceLibrary READ writeDeviceLibrary WRITE setWriteDeviceLibrary
                NOTIFY optionsChanged)
+    Q_PROPERTY(QString extensionFile MEMBER m_extensionFile NOTIFY optionsChanged)
     Q_PROPERTY(bool xdjRxProfile MEMBER m_xdjRxProfile NOTIFY optionsChanged)
     Q_PROPERTY(bool useWavForFlac READ useWavForFlac WRITE setUseWavForFlac NOTIFY optionsChanged)
     Q_PROPERTY(bool incremental READ incremental WRITE setIncremental NOTIFY optionsChanged)
@@ -78,6 +79,7 @@ class ExportController : public QObject {
     bool m_useWavForFlac = false;
     bool m_xdjRxProfile = false;
     QString m_statusText;
+    QString m_extensionFile;
 };
 
 } // namespace ui

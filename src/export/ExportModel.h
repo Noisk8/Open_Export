@@ -47,10 +47,29 @@ struct ExportPlaylist {
     QList<quint32> trackIds; // DeviceSQL ids of the tracks, in order
 };
 
+struct ExportTag {
+    QString category;
+    QString name;
+    QList<quint32> trackIds;
+};
+
+struct ExportBankSlot {
+    int position;
+    quint32 trackId;
+    qsizetype cueIndex;
+};
+
+struct ExportBank {
+    QString name;
+    QList<ExportBankSlot> entries;
+};
+
 // ExportLibrary is the whole content of an export.
 struct ExportLibrary {
     QList<ExportTrack> tracks;
     QList<ExportPlaylist> playlists;
+    QList<ExportTag> tags;
+    QList<ExportBank> banks;
 };
 
 } // namespace device

@@ -15,6 +15,7 @@
 #include <stdexcept>
 
 #include "export/ExportManifest.h"
+#include "export/ExportExtensions.h"
 #include "export/ExportPublication.h"
 #include "export/ExportValidator.h"
 #include "export/anlz/AnlzWriter.h"
@@ -147,7 +148,7 @@ QString ExportManager::audioPath(const core::Track& track) {
 }
 
 ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists,
-                                          bool useWavForFlac) const {
+                                          bool useWavForFlac, const QString& extensionFile) const {
     Q_ASSERT(m_db != nullptr);
     library::TrackRepository repository(*m_db);
 
@@ -164,6 +165,16 @@ ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists
         }
     }
 
+    ExtensionSettings extensions;
+    if (!extensionFile.isEmpty()) {
+        extensions = ExtensionSettings::read(extensionFile, repository.allTracks());
+        for (const auto& bank : extensions.banks) {
+            for (const auto& entry : bank.slotsByPosition) {
+                if (!seen.contains(entry.trackId)) trackIds.append(entry.trackId);
+                seen.insert(entry.trackId);
+            }
+        }
+    }
     const QList<core::Track> tracks = repository.tracksByIds(trackIds);
 
     ExportLibrary library;
@@ -241,6 +252,35 @@ ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists
         library.playlists.append(node);
     }
 
+    for (const auto& tag : extensions.tags) {
+        ExportTag result{tag.category, tag.name, {}};
+        for (qint64 id : tag.trackIds)
+            if (deviceIds.contains(id)) result.trackIds.append(deviceIds.value(id));
+        if (!result.trackIds.isEmpty()) library.tags.append(result);
+    }
+
+    for (const auto& bank : extensions.banks) {
+        ExportBank result{bank.name, {}};
+        for (const auto& entry : bank.slotsByPosition) {
+            const quint32 id = deviceIds.value(entry.trackId);
+            if (!id) throw std::runtime_error("No se encontró una pista del banco");
+            const auto& track = library.tracks.at(id - 1);
+            int loopNumber = 0;
+            qsizetype cueIndex = 0;
+            for (; cueIndex < track.cues.size(); ++cueIndex) {
+                const auto& cue = track.cues.at(cueIndex);
+                if (entry.cueNumber && cue.kind == core::CueKind::HotCue
+                        && cue.hotCueNumber == entry.cueNumber) break;
+                if (entry.loopNumber && cue.kind == core::CueKind::Loop
+                        && ++loopNumber == entry.loopNumber) break;
+            }
+            if (cueIndex == track.cues.size())
+                throw std::runtime_error(QStringLiteral("Cue o loop inexistente en «%1», posición %2 (%3)")
+                        .arg(bank.name).arg(entry.slot).arg(track.track.title).toStdString());
+            result.entries.append({entry.slot, id, cueIndex});
+        }
+        library.banks.append(result);
+    }
     return library;
 }
 
@@ -260,6 +300,8 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
             throw std::runtime_error("No hay pistas para exportar");
         }
 
+        if (!library.banks.isEmpty() && !options.writeDeviceLibrary)
+            throw std::runtime_error("Los bancos de hot cues requieren OneLibrary");
         const QString root = target.canonicalFilePath();
         const QStorageInfo volume(root);
         const QByteArray fs = volume.fileSystemType().toLower();
@@ -493,7 +535,33 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
             }
             prepared.playlists.append(filtered);
         }
+        for (const auto& tag : library.tags) {
+            ExportTag filtered{tag.category, tag.name, {}};
+            for (quint32 id : tag.trackIds)
+                if (exportableIds.contains(id)) filtered.trackIds.append(id);
+            if (!filtered.trackIds.isEmpty()) prepared.tags.append(filtered);
+        }
+        for (const auto& bank : library.banks) {
+            for (const auto& entry : bank.entries) {
+                if (!exportableIds.contains(entry.trackId))
+                    throw std::runtime_error(QStringLiteral("Falta audio en el banco «%1»").arg(bank.name).toStdString());
+            }
+            prepared.banks.append(bank);
+        }
         next.libraryDigest = ExportManifest::libraryHash(prepared);
+        const QString extPath = QStringLiteral("/PIONEER/rekordbox/exportExt.pdb");
+        const auto validateExtension = [&](const QString& exportRoot) {
+            if (prepared.tags.isEmpty()) return;
+            QFile extension(exportRoot + extPath);
+            if (!extension.open(QIODevice::ReadOnly) || !validateExportExt(extension.readAll(), prepared))
+                throw std::runtime_error("exportExt.pdb: etiquetas o referencias inválidas");
+        };
+        if (!prepared.tags.isEmpty()) {
+            const auto bytes = buildExportExt(prepared.tags);
+            writeFile(publication.stage() + extPath, bytes);
+            next.exportExtHash = QString::fromLatin1(
+                    QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+        }
 
         DeviceSqlWriter writer;
         writer.setLibrary(prepared);
@@ -515,6 +583,7 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         if (!next.save(stage, &manifestError))
             throw std::runtime_error(manifestError.toStdString());
 
+        validateExtension(stage);
         QStringList issues;
         if (!ExportValidator::validateExport(stage, &issues, root, options.copyAudio,
                     options.writeAnalysis))
@@ -527,7 +596,13 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         QStringList removePaths;
         if (!options.writeDeviceLibrary)
             removePaths.append(QStringLiteral("/PIONEER/rekordbox/exportLibrary.db"));
+        if (next.exportExtHash.isEmpty()) {
+            const auto previousHash = ExportManifest::load(root, nullptr).exportExtHash;
+            if (!previousHash.isEmpty() && previousHash == fileDigest(publication.destination(extPath), {}))
+                removePaths.append(extPath);
+        }
         publication.publish(removePaths, [&] {
+            validateExtension(root);
             issues.clear();
             if (!ExportValidator::validateExport(root, &issues, {}, options.copyAudio,
                         options.writeAnalysis))

@@ -70,6 +70,7 @@ public:
         paths.sort();
         for (const QString& path : {QStringLiteral("/PIONEER/rekordbox/export.pdb"),
                                    QStringLiteral("/PIONEER/rekordbox/exportLibrary.db"),
+                                   QStringLiteral("/PIONEER/rekordbox/exportExt.pdb"),
                                    QStringLiteral("/PIONEER/rekordbox/.open-deck-manifest.json")}) {
             if (paths.removeOne(path) || removePaths.contains(path)) paths.append(path);
         }

@@ -37,7 +37,7 @@ LibraryController::~LibraryController() {
 
 void LibraryController::cancelImport() { m_cancelImport.storeRelaxed(true); }
 
-void LibraryController::importAsync(const QList<QUrl>& urls) {
+void LibraryController::importAsync(const QList<QUrl>& urls, qint64 playlistId) {
     if (m_importing || urls.isEmpty()) return;
     delete m_importThread;
     m_cancelImport.storeRelaxed(false);
@@ -45,7 +45,7 @@ void LibraryController::importAsync(const QList<QUrl>& urls) {
     m_importStatus = QStringLiteral("Buscando archivos…");
     emit importingChanged();
     const QString dbPath = m_db.databasePath();
-    m_importThread = QThread::create([this, urls, dbPath] {
+    m_importThread = QThread::create([this, urls, dbPath, playlistId] {
         QStringList files;
         for (const auto& url : urls) {
             if (m_cancelImport.loadRelaxed()) break;
@@ -63,6 +63,7 @@ void LibraryController::importAsync(const QList<QUrl>& urls) {
         library::DatabaseManager workerDb(dbPath);
         QString error;
         int imported = 0, skipped = 0, failed = 0;
+        QList<qint64> trackIds;
         if (workerDb.open(&error)) {
             library::TrackRepository repository(workerDb);
             for (int i = 0; i < files.size() && !m_cancelImport.loadRelaxed(); ++i) {
@@ -70,13 +71,20 @@ void LibraryController::importAsync(const QList<QUrl>& urls) {
                 const auto track = library::AudioImportService::readMetadata(files[i], &m_cancelImport);
                 if (m_cancelImport.loadRelaxed()) break;
                 if (track.fileHash.isEmpty()) { ++failed; continue; }
-                if (repository.existsByHash(track.fileHash) || repository.existsByPath(track.filePath)) ++skipped;
-                else if (repository.insertTrack(track) > 0) ++imported;
-                else ++failed;
+                qint64 id = repository.idByHash(track.fileHash);
+                if (id == 0) id = repository.idByPath(track.filePath);
+                if (id > 0) {
+                    ++skipped;
+                } else {
+                    id = repository.insertTrack(track);
+                    if (id > 0) ++imported;
+                    else ++failed;
+                }
+                if (playlistId > 0 && id > 0) trackIds.append(id);
             }
         }
         const bool cancelled = m_cancelImport.loadRelaxed();
-        QMetaObject::invokeMethod(this, [this, imported, skipped, failed, error, cancelled] {
+        QMetaObject::invokeMethod(this, [this, imported, skipped, failed, error, cancelled, playlistId, trackIds] {
             m_importStatus = error.isEmpty()
                 ? QStringLiteral("%1%2 importadas · %3 duplicadas · %4 errores")
                     .arg(cancelled ? QStringLiteral("Cancelado · ") : QString()).arg(imported).arg(skipped).arg(failed)
@@ -85,6 +93,7 @@ void LibraryController::importAsync(const QList<QUrl>& urls) {
             m_importThread->wait();
             m_importing = false;
             reload();
+            if (!trackIds.isEmpty()) emit playlistTracksImported(playlistId, trackIds);
             emit importingChanged();
             emit importFinished(imported, skipped);
         }, Qt::QueuedConnection);

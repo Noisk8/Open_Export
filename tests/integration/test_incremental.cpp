@@ -7,6 +7,8 @@
 
 #include "core/models/playlist.h"
 #include "export/ExportManager.h"
+#include "export/ExportExtensions.h"
+#include "export/onelibrary/SqlCipherWriter.h"
 #include "export/ExportManifest.h"
 #include "export/ExportPublication.h"
 #include "export/ExportValidator.h"
@@ -290,6 +292,105 @@ class TestIncremental : public QObject {
                 device::ExportManifest::load(f->target, &error);
         QVERIFY(manifest.valid);
         QCOMPARE(manifest.tracks.size(), 2);
+    }
+
+    void optionalTagsAndBanksReachUsbAndCanBeDisabled() {
+        auto f = makeFixture();
+        QVERIFY(f);
+        library::PlaylistRepository playlists(*f->db);
+        auto selection = playlists.allPlaylists();
+        const qint64 extraId = selection.first().trackIds.last();
+        selection[0].trackIds.removeLast();
+        library::TrackRepository repository(*f->db);
+        const auto extra = repository.tracksByIds({extraId}).first();
+        const auto first = repository.tracksByIds({selection.first().trackIds.first()}).first();
+        core::Cue cue;
+        cue.hotCueNumber = 2;
+        cue.time = 0.5;
+        core::Cue loop;
+        loop.kind = core::CueKind::Loop;
+        loop.time = 0.75;
+        loop.loopTime = 1.5;
+        QVERIFY(repository.replaceCues(extraId, {cue, loop}));
+
+        const QString config = f->dir.filePath("extensions.json");
+        QFile json(config);
+        QVERIFY(json.open(QIODevice::WriteOnly));
+        const QJsonObject tag{{"category", "Energía"}, {"name", "Ácido"},
+                              {"tracks", QJsonArray{first.filePath, extra.filePath}}};
+        const QJsonObject slot{{"slot", 4}, {"track", extra.filePath}, {"cue", 2}};
+        const QJsonObject loopSlot{{"slot", 8}, {"track", extra.filePath}, {"loop", 1}};
+        const QJsonObject bank{{"name", "Banco"}, {"slots", QJsonArray{slot, loopSlot}}};
+        const QJsonObject data{{"myTags", QJsonArray{tag}}, {"hotCueBanks", QJsonArray{bank}}};
+        QVERIFY(json.write(QJsonDocument(data).toJson()) > 0);
+        json.close();
+
+        device::ExportManager manager(*f->db);
+        const auto normal = manager.buildLibrary(selection);
+        const auto extended = manager.buildLibrary(selection, false, config);
+        QCOMPARE(normal.tracks.size(), 2);
+        QCOMPARE(extended.tracks.size(), 3);
+        QCOMPARE(extended.playlists.first().trackIds, normal.playlists.first().trackIds);
+        QCOMPARE(extended.banks.first().entries.first().trackId, 3u);
+        device::ExportOptions options;
+        options.destination = f->target;
+        QString error;
+        const QString standardPdb = f->target + "/PIONEER/rekordbox/export.pdb";
+        const auto readPdb = [&] {
+            QFile file(standardPdb);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        QCOMPARE(manager.write(normal, options, &error).trackCount, 2);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        const auto normalBytes = readPdb();
+        QVERIFY(!normalBytes.isEmpty());
+
+        QCOMPARE(manager.write(extended, options, &error).trackCount, 3);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        QFile tags(f->target + "/PIONEER/rekordbox/exportExt.pdb");
+        QVERIFY(tags.open(QIODevice::ReadOnly));
+        const auto tagBytes = tags.readAll();
+        QVERIFY(device::validateExportExt(tagBytes, extended));
+        tags.close();
+
+        const QString plain = f->dir.filePath("readback.sqlite");
+        QVERIFY(device::onelibrary::SqlCipherWriter::decryptFile(
+                f->target + "/PIONEER/rekordbox/exportLibrary.db", plain, &error));
+        const QString connection = "phase8_readback";
+        {
+            auto db = QSqlDatabase::addDatabase("QSQLITE", connection);
+            db.setDatabaseName(plain);
+            QVERIFY(db.open());
+            QSqlQuery query(db);
+            QVERIFY(query.exec("SELECT b.name,e.sequenceNo,c.content_id,c.inUsec,c.outUsec "
+                               "FROM hotCueBankList_cue e JOIN hotCueBankList b USING(hotCueBankList_id) "
+                               "JOIN cue c USING(cue_id) ORDER BY e.sequenceNo"));
+            QVERIFY(query.next());
+            QCOMPARE(query.value(0).toString(), QString("Banco"));
+            QCOMPARE(query.value(1).toInt(), 4);
+            QCOMPARE(query.value(2).toInt(), 3);
+            QCOMPARE(query.value(3).toInt(), 500000);
+            QVERIFY(query.next());
+            QCOMPARE(query.value(1).toInt(), 8);
+            QCOMPARE(query.value(3).toInt(), 750000);
+            QCOMPARE(query.value(4).toInt(), 1500000);
+            QVERIFY(!query.next());
+        }
+        QSqlDatabase::removeDatabase(connection);
+
+        auto invalid = extended;
+        invalid.banks.first().entries.first().cueIndex = 999;
+        QCOMPARE(manager.write(invalid, options, &error).trackCount, 0);
+        QVERIFY(!error.isEmpty());
+        QVERIFY(tags.open(QIODevice::ReadOnly));
+        QCOMPARE(tags.readAll(), tagBytes);
+        tags.close();
+
+        QCOMPARE(manager.write(normal, options, &error).trackCount, 2);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!tags.exists());
+        QCOMPARE(readPdb(), normalBytes);
     }
 
     void manifestDetectsContentChanges() {

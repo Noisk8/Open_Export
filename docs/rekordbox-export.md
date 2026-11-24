@@ -354,6 +354,15 @@ resultados en el hilo de la interfaz. Es una estimación propia, no el análisis
 de rekordbox. Si una pista no se ha analizado, los ANLZ se escriben igualmente,
 con `PPTH` y waveforms planas y sin `PQTZ`.
 
+### Extensiones opcionales
+
+`exportExt.pdb` usa el contenedor DeviceSQL de nueve tablas. Open Deck Export
+escribe las categorías y etiquetas en la tabla 3 y las asociaciones a pistas
+en la tabla 4, según el [esquema de Crate Digger](https://github.com/Deep-Symmetry/crate-digger/blob/main/src/main/kaitai/rekordbox_pdb.ksy).
+Los bancos referencian los cues de OneLibrary mediante `hotCueBankList` y
+`hotCueBankList_cue`. Ambos cambios se publican dentro de la operación
+recuperable del USB. Las pruebas físicas siguen pendientes.
+
 ## 5. Lo que todavía no se hace
 
 * ~~**Device Library Plus** (`exportLibrary.db`)~~ — **implementado**. Se
@@ -361,12 +370,8 @@ con `PPTH` y waveforms planas y sin `PQTZ`.
   `exportLibrary.db` (SQLCipher 4, 22 tablas) para los de 2023 en adelante.
   El cifrado se hace con OpenSSL y se ha verificado abriéndolo con el CLI real
   de SQLCipher 4.13. Ver la sección «OneLibrary» más abajo.
-* **`exportExt.pdb`**: sólo contiene las etiquetas (*My Tags*); ningún
-  reproductor las necesita para leer las listas.
 * **Ajustes del dispositivo** (`MYSETTING.DAT`, etc.): los reproductores los
   leen, pero funcionan con sus valores por defecto si no están.
-* **`exportExt.pdb`** (My Tags / menús extendidos): sin especificación pública
-  completa; ningún reproductor lo necesita para leer las listas.
 * **Estructura de frases** (`PSSI`): opcional, sólo afecta al modo
   iluminación del CDJ-3000.
 * **`PQT2`**: la variante extendida del beat grid; la implementation escribe

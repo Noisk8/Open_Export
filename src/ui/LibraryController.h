@@ -46,7 +46,7 @@ class LibraryController : public QAbstractListModel {
     ~LibraryController() override;
     bool importing() const { return m_importing; }
     QString importStatus() const { return m_importStatus; }
-    Q_INVOKABLE void importAsync(const QList<QUrl>& urls);
+    Q_INVOKABLE void importAsync(const QList<QUrl>& urls, qint64 playlistId = 0);
     Q_INVOKABLE void cancelImport();
 
     // QAbstractListModel
@@ -75,6 +75,7 @@ class LibraryController : public QAbstractListModel {
   signals:
     void importingChanged();
     void importProgress(int current, int total);
+    void playlistTracksImported(qint64 playlistId, const QList<qint64>& ids);
     void importFinished(int imported, int skipped);
     void trackCountChanged();
     void missingCountChanged();

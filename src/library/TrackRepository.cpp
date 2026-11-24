@@ -221,20 +221,28 @@ QList<core::Track> TrackRepository::tracksByIds(const QList<qint64>& ids) {
 }
 
 bool TrackRepository::existsByHash(const QString& hash) const {
-    if (hash.isEmpty()) {
-        return false;
-    }
-    QSqlQuery q(m_db.database());
-    q.prepare(QStringLiteral("SELECT 1 FROM tracks WHERE file_hash = :h LIMIT 1"));
-    q.bindValue(QStringLiteral(":h"), hash);
-    return q.exec() && q.next();
+    return idByHash(hash) > 0;
 }
 
 bool TrackRepository::existsByPath(const QString& path) const {
+    return idByPath(path) > 0;
+}
+
+qint64 TrackRepository::idByHash(const QString& hash) const {
+    if (hash.isEmpty()) {
+        return 0;
+    }
     QSqlQuery q(m_db.database());
-    q.prepare(QStringLiteral("SELECT 1 FROM tracks WHERE file_path = :p LIMIT 1"));
+    q.prepare(QStringLiteral("SELECT id FROM tracks WHERE file_hash = :h LIMIT 1"));
+    q.bindValue(QStringLiteral(":h"), hash);
+    return q.exec() && q.next() ? q.value(0).toLongLong() : 0;
+}
+
+qint64 TrackRepository::idByPath(const QString& path) const {
+    QSqlQuery q(m_db.database());
+    q.prepare(QStringLiteral("SELECT id FROM tracks WHERE file_path = :p LIMIT 1"));
     q.bindValue(QStringLiteral(":p"), path);
-    return q.exec() && q.next();
+    return q.exec() && q.next() ? q.value(0).toLongLong() : 0;
 }
 
 QList<core::Beat> TrackRepository::beats(qint64 trackId) const {

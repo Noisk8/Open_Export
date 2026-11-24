@@ -291,10 +291,9 @@ QList<qint64> PlaylistController::trackIds(qint64 playlistId) const {
 }
 
 device::ExportLibrary PlaylistController::buildExportLibrary(const QList<qint64>& ids, bool all,
-                                                            bool useWavForFlac) const {
-    library::PlaylistRepository repository(m_db);
+                                                            bool useWavForFlac, const QString& extensionFile) const {
     device::ExportManager manager(m_db);
-    return manager.buildLibrary(exportPlaylists(ids, all), useWavForFlac);
+    return manager.buildLibrary(exportPlaylists(ids, all), useWavForFlac, extensionFile);
 }
 
 QString PlaylistController::exportTo(const QVariant& destination) {
