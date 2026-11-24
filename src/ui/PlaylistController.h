@@ -27,6 +27,7 @@ class PlaylistController : public QAbstractListModel {
     // Properties, not methods: QML bindings need values that reevaluate when
     // the model changes, and a Q_INVOKABLE read without parentheses is a JS
     // function object instead of the count.
+    Q_PROPERTY(QString lastError READ lastError NOTIFY errorChanged)
     Q_PROPERTY(int playlistCount READ playlistCount NOTIFY playlistsChanged)
     Q_PROPERTY(int totalTrackCount READ totalTrackCount NOTIFY playlistsChanged)
   public:
@@ -36,6 +37,7 @@ class PlaylistController : public QAbstractListModel {
         TrackCountRole,
         IsFolderRole,
         ParentIdRole,
+        DepthRole,
     };
     Q_ENUM(Roles)
 
@@ -48,10 +50,21 @@ class PlaylistController : public QAbstractListModel {
 
     // Playlist management.
     Q_INVOKABLE int playlistCount() const;
-    // Total number of tracks across every playlist.
+    // Number of distinct tracks across all playlists.
     Q_INVOKABLE int totalTrackCount() const;
-    Q_INVOKABLE qint64 createPlaylist(const QString& name, qint64 parentId = 0);
+    QString lastError() const { return m_lastError; }
+    Q_INVOKABLE qint64 createPlaylist(const QString& name, qint64 parentId = 0, bool folder = false);
+    Q_INVOKABLE bool movePlaylist(qint64 id, qint64 parentId, qint64 beforeId = 0);
+    Q_INVOKABLE bool moveTrack(qint64 playlistId, qint64 trackId, qint64 beforeTrackId);
+    Q_INVOKABLE bool editTracks(qint64 playlistId, const QList<qint64>& ids, bool remove = false);
+    Q_INVOKABLE QVariantList folders() const;
+    Q_INVOKABLE QVariantMap exportSummary(const QList<qint64>& ids, bool all,
+                                          bool useWavForFlac = false) const;
+    QList<qint64> exportTrackIds(const QList<qint64>& ids, bool all) const;
+    QList<core::Playlist> exportPlaylists(const QList<qint64>& ids, bool all) const;
     Q_INVOKABLE bool removePlaylist(qint64 playlistId);
+    Q_INVOKABLE bool renamePlaylist(qint64 playlistId, const QString& name);
+    Q_INVOKABLE bool removeTrack(qint64 playlistId, qint64 trackId);
     Q_INVOKABLE bool addTrack(qint64 playlistId, qint64 trackId);
     Q_INVOKABLE QList<qint64> trackIds(qint64 playlistId) const;
 
@@ -61,7 +74,8 @@ class PlaylistController : public QAbstractListModel {
     // Builds the description of the export on the caller's thread. The result
     // is self contained (the analysis data is already loaded), so the actual
     // write can be handed to a worker thread.
-    [[nodiscard]] device::ExportLibrary buildExportLibrary() const;
+    [[nodiscard]] device::ExportLibrary buildExportLibrary(const QList<qint64>& ids = {}, bool all = true,
+                                                                  bool useWavForFlac = false) const;
 
     // Synchronous export, kept for tests and headless callers. The UI uses
     // ExportController, which does the same work off the GUI thread.
@@ -73,10 +87,15 @@ class PlaylistController : public QAbstractListModel {
 
   signals:
     void playlistsChanged();
+    void errorChanged();
     void exportFinished(bool success, const QString& message);
 
-  private:
+  public slots:
     void reload();
+
+  private:
+    bool fail(const QString& message);
+    QString m_lastError;
 
     library::DatabaseManager& m_db;
     QList<core::Playlist> m_playlists;

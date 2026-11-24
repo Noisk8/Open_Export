@@ -21,7 +21,8 @@ void AnalysisWorker::run() {
         }
         const auto& item = m_tracks.at(i);
         emit progress(i, m_tracks.size(), item.second);
-        const audio::AnalysisResult result = audio::AudioAnalysisService::analyze(item.second);
+        const audio::AnalysisResult result = audio::AudioAnalysisService::analyze(item.second, m_cancelFlag);
+        if (m_cancelFlag && m_cancelFlag->loadRelaxed()) break;
         if (result.ok) {
             ++analyzed;
         } else {

@@ -1,4 +1,5 @@
 #include "library/TrackRepository.h"
+#include "library/Savepoint.h"
 
 #include <QDateTime>
 #include <QSqlError>
@@ -80,6 +81,18 @@ qint64 TrackRepository::insertTrack(const core::Track& track) {
         return 0;
     }
     return q.lastInsertId().toLongLong();
+}
+
+bool TrackRepository::removeTracks(const QList<qint64>& ids) {
+    Savepoint transaction(m_db.database());
+    QSqlQuery query(m_db.database());
+    if (!transaction.valid() || !query.prepare(QStringLiteral("DELETE FROM tracks WHERE id = ?")))
+        return false;
+    for (qint64 id : ids) {
+        query.bindValue(0, id);
+        if (!query.exec()) return false;
+    }
+    return transaction.commit();
 }
 
 bool TrackRepository::updateTrack(const core::Track& track) {
@@ -244,14 +257,42 @@ QList<core::Beat> TrackRepository::beats(qint64 trackId) const {
     return result;
 }
 
+bool TrackRepository::registerVerifiedWav(const QString& sourceHash, const QString& path,
+                                          const QString& wavHash) {
+    if (sourceHash.isEmpty() || path.isEmpty() || wavHash.isEmpty()) return false;
+    QSqlQuery query(m_db.database());
+    query.prepare(QStringLiteral("INSERT INTO verified_wav VALUES (?, ?, ?) "
+                                 "ON CONFLICT(source_hash) DO UPDATE SET path=excluded.path, "
+                                 "wav_hash=excluded.wav_hash"));
+    query.addBindValue(sourceHash);
+    query.addBindValue(path);
+    query.addBindValue(wavHash);
+    return query.exec();
+}
+
+QPair<QString, QString> TrackRepository::verifiedWav(const QString& sourceHash) const {
+    QSqlQuery query(m_db.database());
+    query.prepare(QStringLiteral("SELECT path, wav_hash FROM verified_wav WHERE source_hash=?"));
+    query.addBindValue(sourceHash);
+    if (!query.exec() || !query.next()) return {};
+    return {query.value(0).toString(), query.value(1).toString()};
+}
+
+bool TrackRepository::saveAnalysis(const core::Track& track, const QList<core::Beat>& beats,
+                                   const QByteArray& peaks) {
+    Savepoint savepoint(m_db.database());
+    return savepoint.valid() && updateTrack(track) && replaceBeats(track.id, beats)
+            && storeWaveform(track.id, 0, peaks) && savepoint.commit();
+}
+
 bool TrackRepository::replaceBeats(qint64 trackId, const QList<core::Beat>& beats) {
-    m_db.database().transaction();
+    Savepoint savepoint(m_db.database());
+    if (!savepoint.valid()) return false;
     {
         QSqlQuery del(m_db.database());
         del.prepare(QStringLiteral("DELETE FROM track_beats WHERE track_id = :t"));
         del.bindValue(QStringLiteral(":t"), trackId);
         if (!del.exec()) {
-            m_db.database().rollback();
             return false;
         }
         QSqlQuery ins(m_db.database());
@@ -266,12 +307,11 @@ bool TrackRepository::replaceBeats(qint64 trackId, const QList<core::Beat>& beat
             ins.bindValue(QStringLiteral(":time"), beat.time);
             ins.bindValue(QStringLiteral(":tempo"), beat.tempo);
             if (!ins.exec()) {
-                m_db.database().rollback();
                 return false;
             }
         }
     }
-    return m_db.database().commit();
+    return savepoint.commit();
 }
 
 QList<core::Cue> TrackRepository::cues(qint64 trackId) const {

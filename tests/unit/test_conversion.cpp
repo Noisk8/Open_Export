@@ -8,12 +8,18 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QUrl>
+#include <QThread>
+#include <QTimer>
 
 #include <taglib/tpropertymap.h>
 #include <taglib/flacfile.h>
 #include <taglib/wavfile.h>
 
 #include "ui/ConversionController.h"
+#include "export/ExportManager.h"
+#include "library/AudioImportService.h"
+#include "library/DatabaseManager.h"
+#include "library/TrackRepository.h"
 
 using namespace opendeck;
 
@@ -64,6 +70,7 @@ class TestConversion : public QObject {
         QCOMPARE(converter.rowCount(), 1);
         QVERIFY(!converter.running());
 
+        QSignalSpy verified(&converter, &ui::ConversionController::wavVerified);
         QSignalSpy spy(&converter, &ui::ConversionController::finished);
         converter.start();
         QVERIFY(converter.running());
@@ -102,6 +109,123 @@ class TestConversion : public QObject {
         QVERIFY(properties.contains("GENRE"));
         QVERIFY(properties.contains("DATE") || properties.contains("YEAR"));
         QVERIFY(properties.contains("ISRC"));
+        const auto importedWav = library::AudioImportService::readMetadata(wav);
+        QVERIFY(!importedWav.isrc.isEmpty());
+
+        library::DatabaseManager db(dir.filePath("library.db"));
+        QString error;
+        QVERIFY2(db.open(&error), qPrintable(error));
+        library::TrackRepository tracks(db);
+        const qint64 trackId = tracks.insertTrack(library::AudioImportService::readMetadata(flac));
+        QVERIFY(trackId > 0);
+        core::Cue cue;
+        cue.hotCueNumber = 1;
+        cue.time = 0.1;
+        QVERIFY(tracks.replaceCues(trackId, {cue}));
+        QCOMPARE(verified.count(), 1);
+        const auto association = verified.first();
+        QCOMPARE(association[1].toString(), wav);
+        QVERIFY(tracks.registerVerifiedWav(association[0].toString(), wav, association[2].toString()));
+        core::Playlist playlist;
+        playlist.id = 1;
+        playlist.name = "Set";
+        playlist.trackIds = {trackId};
+        device::ExportManager exporter(db);
+        const auto set = exporter.buildLibrary({playlist}, true);
+        QCOMPARE(set.tracks.first().track.id, trackId);
+        QCOMPARE(set.tracks.first().track.filePath, wav);
+        QCOMPARE(set.tracks.first().track.isrc, importedWav.isrc);
+        QCOMPARE(set.tracks.first().cues.first().time, cue.time);
+        QCOMPARE(set.playlists.first().trackIds, QList<quint32>{1});
+        device::ExportOptions options;
+        options.destination = dir.filePath("usb");
+        options.writeDeviceLibrary = false;
+        options.xdjRxProfile = true;
+        QVERIFY(QDir().mkpath(options.destination));
+        QCOMPARE(exporter.write(set, options, &error).trackCount, 1);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QFile changedWav(wav);
+        QVERIFY(changedWav.open(QIODevice::Append));
+        QCOMPARE(changedWav.write("x", 1), 1);
+        changedWav.close();
+        QCOMPARE(exporter.write(set, options, &error).trackCount, 0);
+        QVERIFY(error.contains("WAV verificado"));
+        QVERIFY(QFile::exists(options.destination + set.tracks.first().devicePath));
+
+    }
+
+    void preservesExistingWavAndResolvesBatchCollisions() {
+        QTemporaryDir dir;
+        QVERIFY(QDir().mkpath(dir.path() + "/a"));
+        QVERIFY(QDir().mkpath(dir.path() + "/b"));
+        const QString a = dir.path() + "/a/song.flac";
+        const QString b = dir.path() + "/b/song.flac";
+        QVERIFY(makeFlac(a));
+        QVERIFY(QFile::copy(a, b));
+        QFile existing(dir.path() + "/song.wav");
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        existing.write("original wav bytes");
+        existing.close();
+        ui::ConversionController converter;
+        converter.setOutputDirectory(dir.path());
+        converter.addFiles({QUrl::fromLocalFile(a), QUrl::fromLocalFile(b)});
+        const QString targetA = converter.data(converter.index(0), ui::ConversionController::TargetRole).toString();
+        const QString targetB = converter.data(converter.index(1), ui::ConversionController::TargetRole).toString();
+        QVERIFY(targetA != targetB);
+        QVERIFY(targetA != existing.fileName());
+        QSignalSpy finished(&converter, &ui::ConversionController::finished);
+        converter.start();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QCOMPARE(finished.first()[0].toInt(), 2);
+        QVERIFY(existing.open(QIODevice::ReadOnly));
+        QCOMPARE(existing.readAll(), QByteArray("original wav bytes"));
+        QVERIFY(QFileInfo::exists(targetA));
+        QVERIFY(QFileInfo::exists(targetB));
+        QCOMPARE(QDir(dir.path()).entryList({".ode-*"}, QDir::Files | QDir::Hidden).size(), 0);
+    }
+
+    void lateCollisionDoesNotOverwriteOrLeaveTemporary() {
+        QTemporaryDir dir;
+        const QString source = dir.path() + "/song.flac";
+        const QString target = dir.path() + "/song.wav";
+        QVERIFY(makeFlac(source));
+        QFile existing(target);
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        existing.write("keep me");
+        existing.close();
+        ui::ConversionWorker worker;
+        worker.setJobs({{source, target}});
+        QSignalSpy done(&worker, &ui::ConversionWorker::itemFinished);
+        worker.run();
+        QCOMPARE(done.size(), 1);
+        QVERIFY(!qvariant_cast<ui::ConversionOutcome>(done.first()[1]).ok);
+        QVERIFY(existing.open(QIODevice::ReadOnly));
+        QCOMPARE(existing.readAll(), QByteArray("keep me"));
+        QCOMPARE(QDir(dir.path()).entryList({".ode-*"}, QDir::Files | QDir::Hidden).size(), 0);
+    }
+
+    void cancellationStopsAnActiveProcess() {
+        QTemporaryDir dir;
+        const QString source = dir.path() + "/song.flac";
+        QVERIFY(makeFlac(source));
+        QFile fake(dir.path() + "/ffmpeg");
+        QVERIFY(fake.open(QIODevice::WriteOnly));
+        fake.write("#!/bin/sh\nexec /bin/sleep 60\n");
+        fake.close();
+        QVERIFY(fake.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", dir.path().toLocal8Bit());
+        ui::ConversionController converter;
+        converter.addFiles({QUrl::fromLocalFile(source)});
+        QSignalSpy done(&converter, &ui::ConversionController::finished);
+        converter.start();
+        QTimer::singleShot(150, &converter, &ui::ConversionController::cancel);
+        const bool stopped = done.wait(3000);
+        qputenv("PATH", oldPath);
+        QVERIFY(stopped);
+        QVERIFY(!converter.running());
+        QVERIFY(!QFileInfo::exists(dir.path() + "/song.wav"));
+        QCOMPARE(QDir(dir.path()).entryList({".ode-*"}, QDir::Files | QDir::Hidden).size(), 0);
     }
 
     void rejectsNonFlacFiles() {

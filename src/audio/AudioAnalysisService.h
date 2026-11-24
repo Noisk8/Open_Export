@@ -1,4 +1,5 @@
 #pragma once
+#include <QAtomicInteger>
 
 #include <QString>
 
@@ -23,7 +24,7 @@ namespace audio {
 class AudioAnalysisService {
   public:
     // Decodes and analyses a file. Never throws; check `ok` and `error`.
-    [[nodiscard]] static AnalysisResult analyze(const QString& filePath);
+    [[nodiscard]] static AnalysisResult analyze(const QString& filePath, const QAtomicInteger<bool>* cancel = nullptr);
 
     // True when an ffmpeg executable is reachable.
     [[nodiscard]] static bool ffmpegAvailable();

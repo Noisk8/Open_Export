@@ -1,23 +1,27 @@
 #include "export/ExportManager.h"
 
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDate>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QImage>
 #include <QSaveFile>
+#include <QImage>
 #include <QSet>
 #include <QStringList>
 
 #include <stdexcept>
 
 #include "export/ExportManifest.h"
+#include "export/ExportPublication.h"
+#include "export/ExportValidator.h"
 #include "export/anlz/AnlzWriter.h"
 #include "export/devicesql/DeviceSqlWriter.h"
 #include "export/onelibrary/DeviceLibraryWriter.h"
 #include "library/ArtworkExtractor.h"
+#include "library/AudioImportService.h"
 #include "library/DatabaseManager.h"
 #include "library/TrackRepository.h"
 
@@ -33,20 +37,46 @@ constexpr int kMaxFileStem = 43;
 QString sanitize(const QString& value, const QString& fallback) {
     QString result;
     result.reserve(value.size());
-    for (const QChar c : value) {
+    for (const QChar c : value.normalized(QString::NormalizationForm_C)) {
         if (c == QChar('/') || c == QChar('\\') || c == QChar(':') || c == QChar('*')
                 || c == QChar('?') || c == QChar('"') || c == QChar('<') || c == QChar('>')
-                || c == QChar('|') || c == QChar(0)) {
+                || c == QChar('|') || c.unicode() < 32) {
             result.append(QChar('_'));
         } else {
             result.append(c);
         }
     }
     result = result.trimmed();
+    while (result.endsWith('.') || result.endsWith(' ')) result.chop(1);
+    result = result.left(100);
+    if (!result.isEmpty() && result.back().isHighSurrogate()) result.chop(1);
     if (result.isEmpty()) {
         return fallback;
     }
     return result;
+}
+
+void checkRxAudio(const QString& path, int type, const core::Track& audio) {
+    const bool pcm = type == 11 || type == 12;
+    const bool rate = audio.sampleRate == 44100 || audio.sampleRate == 48000;
+    if ((type != 1 && type != 4 && !pcm) || audio.channels < 1 || audio.channels > 2
+            || (pcm && (!rate || (audio.sampleDepth != 16 && audio.sampleDepth != 24)))
+            || (type == 11 && !library::AudioImportService::isIntegerPcmWav(path))) {
+        throw std::runtime_error(QStringLiteral("Audio fuera del perfil XDJ-RX: %1").arg(path).toStdString());
+    }
+}
+
+QString fileDigest(const QString& path, const ExportCallbacks& callbacks) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!file.atEnd()) {
+        if (callbacks.cancelled && callbacks.cancelled()) return {};
+        const auto chunk = file.read(1024 * 1024);
+        if (file.error() != QFile::NoError) return {};
+        hash.addData(chunk);
+    }
+    return QString::fromLatin1(hash.result().toHex());
 }
 
 void writeFile(const QString& path, const QByteArray& data) {
@@ -66,16 +96,16 @@ bool writeArtworkFile(const QString& path, const QByteArray& data) {
     if (!image.loadFromData(data)) {
         return false;
     }
-    QDir().mkpath(QFileInfo(path).absolutePath());
     QImage small = image.scaled(80, 80, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     QImage large = image.scaled(240, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    if (!small.save(path, "JPG", 85)) {
-        return false;
-    }
-    QFileInfo info(path);
-    const QString largePath = info.absolutePath() + QChar('/') + info.completeBaseName()
-            + QStringLiteral("_m.jpg");
-    large.save(largePath, "JPG", 90);
+    QByteArray smallBytes;
+    QByteArray largeBytes;
+    QBuffer smallBuffer(&smallBytes);
+    QBuffer largeBuffer(&largeBytes);
+    if (!smallBuffer.open(QIODevice::WriteOnly) || !largeBuffer.open(QIODevice::WriteOnly)
+            || !small.save(&smallBuffer, "JPG", 85) || !large.save(&largeBuffer, "JPG", 90)) return false;
+    writeFile(path, smallBytes);
+    writeFile(path.chopped(4) + QStringLiteral("_m.jpg"), largeBytes);
     return true;
 }
 
@@ -86,7 +116,7 @@ int ExportManager::fileTypeFor(const QString& filePath) {
     if (suffix == QStringLiteral("mp3")) {
         return 1;
     }
-    if (suffix == QStringLiteral("m4a")) {
+    if (suffix == QStringLiteral("m4a") || suffix == QStringLiteral("aac")) {
         return 4;
     }
     if (suffix == QStringLiteral("flac")) {
@@ -116,7 +146,8 @@ QString ExportManager::audioPath(const core::Track& track) {
     return QStringLiteral("/Contents/%1/%2/%3").arg(artist, album, fileName);
 }
 
-ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists) const {
+ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists,
+                                          bool useWavForFlac) const {
     Q_ASSERT(m_db != nullptr);
     library::TrackRepository repository(*m_db);
 
@@ -138,35 +169,44 @@ ExportLibrary ExportManager::buildLibrary(const QList<core::Playlist>& playlists
     ExportLibrary library;
     QHash<qint64, quint32> deviceIds;
     QSet<QString> usedPaths;
+    QSet<QString> usedAnalysisPaths;
 
     for (const core::Track& track : tracks) {
         ExportTrack item;
         item.track = track;
+        if (useWavForFlac && track.filePath.endsWith(".flac", Qt::CaseInsensitive)) {
+            const auto [path, hash] = repository.verifiedWav(track.fileHash);
+            item.track.filePath = path;
+            item.verifiedWavHash = hash;
+            if (item.track.title.isEmpty())
+                item.track.title = QFileInfo(track.filePath).completeBaseName();
+        }
         item.deviceId = static_cast<quint32>(library.tracks.size() + 1);
         deviceIds.insert(track.id, item.deviceId);
 
-        QString path = audioPath(track);
+        QString path = audioPath(item.track);
         // Two tracks may end up with the same name; keep them apart.
         int suffix = 2;
-        while (usedPaths.contains(path)) {
-            const QFileInfo info(path);
+        const QFileInfo info(path);
+        while (usedPaths.contains(path.toCaseFolded())
+                || usedAnalysisPaths.contains(AnlzWriter::analysisPath(path))) {
             const QString extension = info.suffix();
-            const QString stem = extension.isEmpty() ? info.completeBaseName()
-                                                    : info.completeBaseName();
+            const QString stem = info.completeBaseName();
             path = QStringLiteral("/Contents/%1/%2/%3 (%4).%5")
                     .arg(info.path().section(QStringLiteral("/"), 2, 2),
                             info.path().section(QStringLiteral("/"), 3, 3), stem)
                     .arg(suffix++)
                     .arg(extension);
         }
-        usedPaths.insert(path);
+        usedPaths.insert(path.toCaseFolded());
 
         item.devicePath = path;
         item.fileName = path.section(QChar('/'), -1);
-        item.fileType = fileTypeFor(track.filePath);
+        item.fileType = fileTypeFor(item.track.filePath);
         item.analyzePath = AnlzWriter::analysisPath(path);
+        usedAnalysisPaths.insert(item.analyzePath);
 
-        const QFileInfo fileInfo(track.filePath);
+        const QFileInfo fileInfo(item.track.filePath);
         item.fileSize = fileInfo.exists() ? fileInfo.size() : 0;
 
         // Resolve the analysis here, on the GUI thread: the export worker must
@@ -220,7 +260,13 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
             throw std::runtime_error("No hay pistas para exportar");
         }
 
-        const QString root = target.absoluteFilePath();
+        const QString root = target.canonicalFilePath();
+        const QStorageInfo volume(root);
+        const QByteArray fs = volume.fileSystemType().toLower();
+        const bool fat = fs == "vfat" || fs == "msdos" || fs == "fat" || fs == "fat32";
+        if (options.xdjRxProfile && root == volume.rootPath() && !fat)
+            throw std::runtime_error("El perfil XDJ-RX requiere un USB FAT o FAT32");
+        ExportPublication publication(root);
         const QString createdDate = QDate::currentDate().toString(Qt::ISODate);
 
         // --- Only export tracks whose audio is actually reachable ------------
@@ -230,13 +276,22 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         QList<ExportTrack> exportable;
         QSet<quint32> exportableIds;
         for (const ExportTrack& item : library.tracks) {
+            if (item.track.filePath.isEmpty())
+                throw std::runtime_error(QStringLiteral("Falta convertir a WAV: %1")
+                        .arg(item.track.title).toStdString());
             const QFileInfo source(item.track.filePath);
             if (!source.isFile() || !source.isReadable()) {
+                if (!item.verifiedWavHash.isEmpty())
+                    throw std::runtime_error(QStringLiteral("WAV verificado no disponible: %1")
+                            .arg(item.track.filePath).toStdString());
                 ++report.missingTracks;
                 report.warnings.append(
                         QStringLiteral("Archivo no encontrado: %1").arg(item.track.filePath));
                 continue;
             }
+            if (item.fileType == 0)
+                throw std::runtime_error(QStringLiteral("Formato sin soporte de exportación: %1")
+                        .arg(item.track.filePath).toStdString());
             exportable.append(item);
             exportableIds.insert(item.deviceId);
         }
@@ -248,7 +303,7 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
 
         // A previous export lets the incremental mode reuse unchanged files.
         const ExportManifest previous =
-                options.incremental ? ExportManifest::load(root, error) : ExportManifest();
+                options.incremental ? ExportManifest::load(root, nullptr) : ExportManifest();
         ExportManifest next;
         next.valid = true;
         next.version = ExportManifest::kVersion;
@@ -295,8 +350,8 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
 
         // --- Copy the audio and write the analysis --------------------------
         for (int index = 0; index < exportable.size(); ++index) {
-            const ExportTrack& item = exportable.at(index);
-            const core::Track& track = item.track;
+            ExportTrack& item = exportable[index];
+            core::Track& track = item.track;
 
             if (callbacks.cancelled && callbacks.cancelled()) {
                 report.cancelled = true;
@@ -307,30 +362,75 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
                         item.fileName);
             }
 
+            const QFileInfo sourceInfo(track.filePath);
+            item.fileSize = sourceInfo.size();
+            const QString audioTarget = publication.destination(item.devicePath);
+            const bool sameFile = sourceInfo.canonicalFilePath()
+                    == QFileInfo(audioTarget).canonicalFilePath();
+            if (options.incremental || options.copyAudio || !item.verifiedWavHash.isEmpty()) {
+                track.fileHash = fileDigest(track.filePath, callbacks);
+                if (track.fileHash.isEmpty()) {
+                    if (callbacks.cancelled && callbacks.cancelled()) {
+                        report.cancelled = true;
+                        return report;
+                    }
+                    throw std::runtime_error("No se pudo verificar el audio original");
+                }
+            }
+            const auto audio = library::AudioImportService::readMetadata(track.filePath, nullptr, false);
+            if (track.isrc.isEmpty()) track.isrc = audio.isrc;
+            if (track.comment.isEmpty()) track.comment = audio.comment;
+            if (track.label.isEmpty()) track.label = audio.label;
+            if (track.composer.isEmpty()) track.composer = audio.composer;
+            if (track.mixName.isEmpty()) track.mixName = audio.mixName;
+            if (track.trackNumber == 0) track.trackNumber = audio.trackNumber;
+            if (track.discNumber == 0) track.discNumber = audio.discNumber;
+            if (!item.verifiedWavHash.isEmpty() || options.xdjRxProfile) {
+                if (!item.verifiedWavHash.isEmpty()
+                        && (audio.sampleRate <= 0 || track.fileHash != item.verifiedWavHash))
+                    throw std::runtime_error("El WAV verificado cambió; vuelve a convertir el FLAC");
+                if (options.xdjRxProfile) checkRxAudio(track.filePath, item.fileType, audio);
+                track.sampleDepth = audio.sampleDepth;
+                track.sampleRate = audio.sampleRate;
+                track.channels = audio.channels;
+                track.bitrate = audio.bitrate;
+            }
             const QString trackDigest = ExportManifest::trackHash(item);
-            next.tracks.insert(item.devicePath, trackDigest);
-            const QString audioTarget = root + item.devicePath;
-            const QString anlzTarget = root + item.analyzePath;
-            // Exporting onto the same volume that already holds Contents/ means
-            // source and destination can be the very same file: never delete it.
-            const bool sameFile = QFileInfo(track.filePath).absoluteFilePath()
-                    == QFileInfo(audioTarget).absoluteFilePath();
+            if (options.copyAudio) next.tracks.insert(item.devicePath, trackDigest);
+
             const bool reusable = previous.valid
                     && previous.tracks.value(item.devicePath) == trackDigest
-                    && (!options.copyAudio || QFile::exists(audioTarget))
-                    && (!options.writeAnalysis || QFile::exists(anlzTarget));
-            if (reusable) {
-                ++report.skippedTracks;
-                continue;
-            }
-
-            if (options.copyAudio && !sameFile) {
-                QDir().mkpath(QFileInfo(audioTarget).absolutePath());
-                // An export may be written over a previous one.
-                QFile::remove(audioTarget);
-                if (!QFile::copy(track.filePath, audioTarget)) {
-                    throw std::runtime_error("No se pudo copiar " + track.filePath.toStdString());
+                    && (!options.copyAudio || fileDigest(audioTarget, callbacks) == track.fileHash);
+            if (options.copyAudio && !sameFile
+                    && (!reusable || previous.ownedAudio.contains(item.devicePath)))
+                next.ownedAudio.insert(item.devicePath, track.fileHash);
+            bool skipped = reusable;
+            if (options.copyAudio && !sameFile && !reusable) {
+                if (fat && item.fileSize > 0xffffffffLL)
+                    throw std::runtime_error("Un archivo supera el límite de 4 GiB de FAT32");
+                const QStorageInfo current(root);
+                if (current.bytesAvailable() >= 0 && item.fileSize > current.bytesAvailable())
+                    throw std::runtime_error("Espacio insuficiente para preparar la exportación");
+                const QString stagedAudio = publication.stage() + item.devicePath;
+                QDir().mkpath(QFileInfo(stagedAudio).absolutePath());
+                QFile source(track.filePath);
+                QSaveFile target(stagedAudio);
+                QCryptographicHash copied(QCryptographicHash::Sha256);
+                if (!source.open(QIODevice::ReadOnly) || !target.open(QIODevice::WriteOnly))
+                    throw std::runtime_error("No se pudo abrir el audio para copiar");
+                while (!source.atEnd()) {
+                    if (callbacks.cancelled && callbacks.cancelled()) {
+                        report.cancelled = true;
+                        return report;
+                    }
+                    const QByteArray chunk = source.read(1024 * 1024);
+                    copied.addData(chunk);
+                    if (source.error() != QFile::NoError || target.write(chunk) != chunk.size())
+                        throw std::runtime_error("Error copiando audio");
                 }
+                if (QString::fromLatin1(copied.result().toHex()) != track.fileHash)
+                    throw std::runtime_error("El audio original cambió durante la copia");
+                if (!target.commit()) throw std::runtime_error("No se pudo guardar el audio");
             }
 
             if (options.writeAnalysis) {
@@ -341,37 +441,35 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
                 data.cues = item.cues;
                 data.peaks = item.peaks;
 
-                const QString directory = root + AnlzWriter::analysisDirectory(item.devicePath);
-                QDir().mkpath(directory);
-                writeFile(directory + QStringLiteral("/ANLZ0000.DAT"),
-                        AnlzWriter::buildDat(data));
-                writeFile(directory + QStringLiteral("/ANLZ0000.EXT"),
-                        AnlzWriter::buildExt(data));
-                writeFile(directory + QStringLiteral("/ANLZ0000.2EX"),
-                        AnlzWriter::build2Ex(data));
-                ++report.analysisCount;
+                const QString directory = AnlzWriter::analysisDirectory(item.devicePath);
+                const QList<QPair<QString, QByteArray>> files{
+                    {"/ANLZ0000.DAT", AnlzWriter::buildDat(data)},
+                    {"/ANLZ0000.EXT", AnlzWriter::buildExt(data)},
+                    {"/ANLZ0000.2EX", AnlzWriter::build2Ex(data)}};
+                bool analysisWritten = false;
+                for (const auto& [name, bytes] : files) {
+                    QFile existing(publication.destination(directory + name));
+                    if (reusable && existing.open(QIODevice::ReadOnly)
+                            && existing.size() == bytes.size() && existing.readAll() == bytes) continue;
+                    writeFile(publication.stage() + directory + name, bytes);
+                    analysisWritten = true;
+                }
+                if (analysisWritten) {
+                    ++report.analysisCount;
+                    skipped = false;
+                }
             }
 
+            if (skipped) ++report.skippedTracks;
             if (artworkBytes.contains(track.id)) {
-                const QString path = root + artworkPaths.value(track.id);
+                const QString path = publication.stage() + artworkPaths.value(track.id);
                 if (writeArtworkFile(path, artworkBytes.value(track.id))) {
                     ++report.artworkCount;
+                } else {
+                    artworkIds.remove(track.id);
+                    artworkPaths.remove(track.id);
+                    report.warnings.append(QStringLiteral("No se pudo escribir la carátula de %1").arg(track.title));
                 }
-            }
-        }
-
-        // --- Remove the files of tracks that are no longer exported -----------
-        if (previous.valid) {
-            for (auto it = previous.tracks.constBegin(); it != previous.tracks.constEnd(); ++it) {
-                if (next.tracks.contains(it.key())) {
-                    continue;
-                }
-                QFile::remove(root + it.key());
-                const QString directory = root + AnlzWriter::analysisDirectory(it.key());
-                QFile::remove(directory + QStringLiteral("/ANLZ0000.DAT"));
-                QFile::remove(directory + QStringLiteral("/ANLZ0000.EXT"));
-                QFile::remove(directory + QStringLiteral("/ANLZ0000.2EX"));
-                ++report.removedTracks;
             }
         }
 
@@ -400,22 +498,76 @@ ExportReport ExportManager::write(const ExportLibrary& library, const ExportOpti
         DeviceSqlWriter writer;
         writer.setLibrary(prepared);
         writer.setCreationDate(createdDate);
-        writeFile(root + QStringLiteral("/PIONEER/rekordbox/export.pdb"), writer.build());
+        writeFile(publication.stage() + QStringLiteral("/PIONEER/rekordbox/export.pdb"), writer.build());
 
         if (options.writeDeviceLibrary) {
             QString dlpError;
             if (!onelibrary::DeviceLibraryWriter::write(
-                        root + QStringLiteral("/PIONEER/rekordbox/exportLibrary.db"),
+                        publication.stage() + QStringLiteral("/PIONEER/rekordbox/exportLibrary.db"),
                         prepared, createdDate, &dlpError)) {
                 throw std::runtime_error("Device Library Plus: "
                         + dlpError.toStdString());
             }
         }
 
-        // Save the manifest even for a full export: the next one can reuse it.
+        const QString stage = publication.stage();
         QString manifestError;
-        if (!next.save(root, &manifestError)) {
-            report.warnings.append(manifestError);
+        if (!next.save(stage, &manifestError))
+            throw std::runtime_error(manifestError.toStdString());
+
+        QStringList issues;
+        if (!ExportValidator::validateExport(stage, &issues, root, options.copyAudio,
+                    options.writeAnalysis))
+            throw std::runtime_error(issues.join(QStringLiteral(" · ")).toStdString());
+        if (callbacks.cancelled && callbacks.cancelled()) {
+            report.cancelled = true;
+            return report;
+        }
+
+        QStringList removePaths;
+        if (!options.writeDeviceLibrary)
+            removePaths.append(QStringLiteral("/PIONEER/rekordbox/exportLibrary.db"));
+        publication.publish(removePaths, [&] {
+            issues.clear();
+            if (!ExportValidator::validateExport(root, &issues, {}, options.copyAudio,
+                        options.writeAnalysis))
+                throw std::runtime_error(issues.join(QStringLiteral(" · ")).toStdString());
+        });
+
+        QSet<QString> retained;
+        for (auto it = next.tracks.cbegin(); it != next.tracks.cend(); ++it)
+            retained.insert(it.key().toCaseFolded());
+        QSet<QString> retainedAnalysis;
+        for (const auto& item : exportable) retainedAnalysis.insert(item.analyzePath);
+        QSet<QString> sourcePaths;
+        for (const auto& item : exportable) {
+            const QString path = QFileInfo(item.track.filePath).canonicalFilePath();
+            if (path.startsWith(root + '/')) sourcePaths.insert(path.mid(root.size()).toCaseFolded());
+        }
+        // --- Remove the files of tracks that are no longer exported -----------
+        if (previous.valid) {
+            for (auto it = previous.ownedAudio.cbegin(); it != previous.ownedAudio.cend(); ++it) {
+                if (!options.copyAudio || retained.contains(it.key().toCaseFolded())
+                        || sourcePaths.contains(it.key().toCaseFolded())) {
+                    continue;
+                }
+                if (!it.key().startsWith("/Contents/") || QDir::cleanPath(it.key()) != it.key()) continue;
+                try {
+                    const QString path = publication.destination(it.key());
+                    if (fileDigest(path, {}) != it.value() || !QFile::remove(path)) continue;
+                    ++report.removedTracks;
+                    if (!retainedAnalysis.contains(AnlzWriter::analysisPath(it.key()))) {
+                        const QString directory = AnlzWriter::analysisDirectory(it.key());
+                        for (const QString& name : {QStringLiteral("/ANLZ0000.DAT"),
+                                                    QStringLiteral("/ANLZ0000.EXT"),
+                                                    QStringLiteral("/ANLZ0000.2EX")})
+                            QFile::remove(publication.destination(directory + name));
+                    }
+                } catch (const std::exception& e) {
+                    report.warnings.append(QString::fromUtf8(e.what()));
+                    break;
+                }
+            }
         }
 
         report.trackCount = static_cast<int>(prepared.tracks.size());

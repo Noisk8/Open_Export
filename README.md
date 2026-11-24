@@ -4,13 +4,28 @@ Aplicación de escritorio **open source** para analizar música y preparar
 memorias USB compatibles con reproductores **Pioneer DJ** (formato rekordbox),
 sin depender de rekordbox.
 
-**Estado: Fases 1–7 completadas.** Biblioteca SQLite, importación, análisis
-musical (BPM, tonalidad, beat grid y waveform), editor de cues y loops,
-`export.pdb` (DeviceSQL), `exportLibrary.db` (OneLibrary / Device Library Plus
-cifrado con SQLCipher 4), ANLZ, detección de memorias USB, exportación
-incremental, conversor FLAC → WAV sin pérdida y empaquetado (TGZ/DEB).
-Pendiente únicamente la **validación en hardware real** y `exportExt.pdb`.
-Ver [docs/compatibility.md](docs/compatibility.md) para el estado exacto.
+**Estado:** funciones principales implementadas, con pruebas automatizadas de
+biblioteca, análisis, exportación y conversión. La interfaz incluye carpetas de
+playlists, selección múltiple, importación en segundo plano, preescucha y
+exportación selectiva. El conversor protege archivos existentes y verifica PCM
+antes de publicar el WAV. La **validación en hardware real** y `exportExt.pdb`
+siguen pendientes; las fases implementadas no certifican compatibilidad física.
+
+Ver [diagnóstico y soluciones](docs/revision-suite-dj.md) y
+[matriz de compatibilidad](docs/compatibility.md).
+
+## Inicio rápido
+
+Desde la raíz del proyecto, si ya lo compilaste:
+
+```sh
+./build/open-deck-export
+```
+
+Para preparar un set, importa tu música, organízala en playlists, analiza
+las pistas y exporta la selección al USB. Si el reproductor requiere WAV,
+convierte primero los FLAC desde la propia app y selecciona los WAV verificados
+al exportar. [Ver los pasos completos](#uso).
 
 ## Objetivo
 
@@ -22,7 +37,7 @@ Replicar el flujo del modo *EXPORT* de Rekordbox con código propio:
 4. Exportar a una memoria USB detectada automáticamente, generando `export.pdb`
    (DeviceSQL) y los análisis `ANLZ`.
 5. Validar las exportaciones antes de darlas por buenas.
-6. Convertir FLAC a WAV sin pérdida conservando toda la metadata.
+6. Convertir FLAC a WAV sin pérdida, restaurar metadata y proteger WAV existentes.
 
 > **Importante**: este proyecto **no afirma compatibilidad con hardware** salvo
 > que una exportación haya sido **probada físicamente** en un reproductor. Se
@@ -36,6 +51,8 @@ Replicar el flujo del modo *EXPORT* de Rekordbox con código propio:
 - TagLib ≥ 1.12.
 - SQLite3.
 - **FFmpeg** (`ffmpeg` en el `PATH`) para el análisis musical y el conversor.
+- Qt Multimedia (`qml6-module-qtmultimedia`) para reproducir, pausar, desplazar
+  la reproducción y controlar volumen desde la tabla o un cue.
 - **OpenSSL / libcrypto** (`libssl-dev`) para el cifrado SQLCipher 4.
 
 En Ubuntu/Debian:
@@ -45,6 +62,7 @@ sudo apt install cmake ninja-build g++ ffmpeg \
     qt6-base-dev qt6-declarative-dev qt6-tools-dev \
     qml6-module-qtquick qml6-module-qtquick-controls \
     qml6-module-qtquick-layouts qml6-module-qtquick-dialogs \
+    qml6-module-qtmultimedia \
     libsqlite3-dev libtag1-dev libssl-dev
 ```
 
@@ -280,12 +298,16 @@ SQLCipher 4.13** (`PRAGMA integrity_check` → `ok`).
 
 ### 6. Exportación incremental
 
-`/PIONEER/rekordbox/.open-deck-manifest.json` guarda un hash por pista
-(metadatos + beat grid + cues + waveform + carátula). En la siguiente
-exportación se comparan: las pistas sin cambios no se vuelven a copiar ni a
-analizar, las cambiadas se reescriben y las que desaparecieron se borran.
-`export.pdb` y `exportLibrary.db` se regeneran siempre (son baratos).
-Se activa con la casilla «Exportación incremental» del diálogo.
+La exportación incremental verifica el contenido del origen, el audio ya
+copiado y los tres ANLZ antes de reutilizarlos. Tras publicar una versión
+válida, elimina las copias obsoletas que el manifiesto identifica como propias
+y cuyo contenido sigue intacto. Las bases del USB se regeneran en cada operación.
+
+La app prepara los archivos nuevos en una carpeta temporal del USB y valida
+el conjunto antes de publicarlo. Durante la publicación mantiene copias de
+respaldo de los archivos sustituidos. Si hay una desconexión con la publicación
+en curso, reconecta el USB y vuelve a iniciar una exportación al mismo destino.
+La app intenta recuperar la versión anterior antes de empezar la nueva.
 
 ### 7. Concurrencia y validación
 
@@ -294,9 +316,9 @@ Se activa con la casilla «Exportación incremental» del diálogo.
   una `ExportLibrary` ya resuelta: puede ejecutarse en cualquier hilo.
 - `ExportController` lanza un `QThread`; la UI sigue respondiendo, muestra el
   progreso pista a pista y permite cancelar entre pistas.
-- Al terminar, `ExportValidator` usa `DeviceSqlReader` (escrito aparte del
-  escritor) para comprobar la cabecera, las 20 tablas, las rutas, la jerarquía
-  de listas, la numeración de entradas y la existencia de audio y ANLZ.
+- Antes y después de publicar, el validador comprueba las rutas de audio, la
+  estructura y ruta interna de los ANLZ, y que Device Library y OneLibrary
+  coincidan en pistas, jerarquía y orden del set cuando se generan ambas.
 
 El desglose byte a byte, con tablas de offsets y las referencias a las
 especificaciones públicas, está en
@@ -304,38 +326,49 @@ especificaciones públicas, está en
 
 ## Uso
 
-1. Arrastra canciones o carpetas al panel central.
-2. En cuanto importas pistas nuevas, el contador **«N pistas pendientes»** se
-   actualiza al instante y se habilita **«Analizar biblioteca»** (barra
-   izquierda). La app decodifica cada pista con FFmpeg en un hilo de trabajo y
-   guarda BPM, tonalidad, beat grid y waveform en SQLite, con progreso y estado.
-   También puedes analizar desde el propio diálogo de exportación.
-3. En el panel derecho crea una lista (queda seleccionada sola) y añade pistas
-   con el botón `+` de cada fila. El botón **«Cues»** de cada pista abre el
-   editor de hot cues, memory cues y loops (posición, duración del loop,
-   color, nombre y comentario).
-4. Pulsa **«Exportar a USB…»**: se abre un selector con las memorias USB
-   conectadas (se excluyen los discos internos). Elige una y pulsa
-   **«Exportar aquí»**. Si quedan pistas sin analizar, el propio diálogo
-   avisa y ofrece analizarlas.
-5. La copia del audio (que puede ser de varios GB a un pendrive FAT32) se hace
-   **en segundo plano**: la ventana sigue respondiendo, muestra el progreso
-   pista a pista y permite cancelar. Al terminar se valida lo escrito.
-6. Si algunas pistas de la biblioteca ya no tienen archivo (por ejemplo, el USB
-   se reformateó o se montó con otra etiqueta), la barra izquierda muestra
-   **«N pistas sin archivo»**. El botón **«Relocalizar»** busca los archivos en
-   los volúmenes montados y repara las rutas; la app también lo intenta sola al
-   arrancar y al conectar un dispositivo. Las que no se encuentren **se omiten**
-   de la exportación (y de `export.pdb`/`exportLibrary.db`), de modo que la
-   exportación sigue siendo válida en lugar de fallar la validación.
-7. En el diálogo, si quedan pistas sin analizar, aparece un aviso con
-   **«Analizar ahora»** y, en cada dispositivo, **«Analizar + exportar»**:
-   analiza en segundo plano y exporta automáticamente al terminar. También
-   puedes activar/desactivar **Device Library Plus** y la **exportación
-   incremental**. «Otra carpeta…» permite exportar a cualquier directorio.
+1. **Importa música.** Arrastra archivos o carpetas a la ventana, o usa los
+   botones de importación. La biblioteca guarda las rutas y los metadatos en
+   SQLite. Los archivos originales se conservan en su ubicación.
+2. **Organiza el set.** Crea una playlist o una carpeta. Selecciona la lista y
+   abre **Toda la música / añadir pistas**. Puedes añadir temas uno a uno o
+   seleccionar varios. Para cambiar el orden guardado, usa **Orden del set** y
+   arrastra cada pista por el asa. Los otros criterios de orden solo cambian
+   la vista.
+3. **Analiza y prepara las pistas.** Pulsa **Analizar biblioteca** para
+   calcular BPM, tonalidad, beatgrid y waveform. Usa la preescucha y el
+   editor **Cues** para preparar hot cues, memory cues y loops. Desde un
+   dispositivo USB también puedes pulsar **Analizar + exportar** para
+   analizar las pistas pendientes de la selección.
+4. **Convierte los FLAC que necesites.** Abre **Convertir FLAC → WAV**, añade
+   los archivos y elige una carpeta de salida. El conversor comprueba que el
+   audio PCM del WAV coincida con el del FLAC. Si activas **Exportar los FLAC
+   como WAV verificado**, la app usa los WAV creados por el conversor y
+   conserva el orden, los cues y el análisis de la playlist.
+5. **Revisa el destino.** Pulsa **Exportar a USB…**, selecciona las listas o
+   carpetas y elige el USB. **Otra carpeta…** permite generar una exportación
+   local de prueba. Revisa el espacio disponible y los archivos ausentes. El
+   **Perfil XDJ-RX original** activa el uso de WAV verificados para los FLAC
+   y aplica comprobaciones preliminares de formato. Consulta la
+   [matriz de compatibilidad](docs/compatibility.md) para conocer el estado
+   de las pruebas en hardware.
+6. **Exporta y expulsa el USB.** La selección reemplaza la biblioteca del
+   destino. La app copia el audio, genera los archivos ANLZ y escribe
+   `export.pdb` y, si está activado, `exportLibrary.db` (OneLibrary).
+   La exportación incremental verifica los archivos antes de reutilizarlos.
+   Cuando la app termine y valide la exportación, expulsa el USB desde el
+   sistema.
 
-> Para probar en un CDJ real: formatea el USB en **FAT32/MBR**
-> (`mkfs.fat -F 32 -S 512`) y selecciónalo en el diálogo.
+### Si aparece «Pistas sin archivo»
+
+- Si la música está en un disco desconectado, conéctalo y pulsa
+  **Relocalizar** para conservar las pistas y su preparación.
+- Si ya no tienes esos archivos, pulsa **Quitar ausentes** y confirma. La app
+  vuelve a comprobar las rutas y quita de la biblioteca y de las playlists
+  únicamente las pistas que siguen ausentes, junto con sus cues y análisis.
+  Los archivos de audio se conservan.
+- Si el USB se desconecta durante la publicación de una exportación,
+  reconéctalo y vuelve a exportar al mismo destino. Antes de preparar el
+  nuevo set, la app intenta recuperar la versión anterior.
 
 ## Análisis musical
 
@@ -363,12 +396,16 @@ destino. Cada conversión:
    del FLAC, y decide el codec PCM (`pcm_s16le` / `pcm_s24le` / `pcm_s32le`).
 2. Ejecuta `ffmpeg` con `-map_metadata 0`, sin resampleo, sin dithering y sin
    paso con pérdida.
-3. Reescribe **todos** los tags (incluidas claves Vorbis arbitrarias e ISRC)
-   y la carátula embebida en el WAV mediante TagLib (ID3v2 / INFO).
+3. Restaura las etiquetas y la carátula que se pueden conservar en WAV
+   mediante TagLib (ID3v2 / INFO). Si alguna etiqueta cambia o se pierde,
+   el conversor informa de que los metadatos se conservaron parcialmente.
 4. **Verifica que es bit-exact**: decodifica el FLAC y el WAV a PCM `f64le` y
    compara sus SHA-256. Si no coinciden, marca el archivo como error.
 
-Todo corre en un hilo aparte, con progreso, cancelación y estado por archivo.
+Los destinos ocupados reciben sufijos y cada WAV se verifica en un temporal
+antes de publicarse sin reemplazar otro archivo. La verificación PCM calcula
+el hash por bloques. Todo corre en un hilo aparte, con progreso, cancelación
+y estado por archivo.
 Verificado en `tests/unit/test_conversion.cpp` con un FLAC real con metadata.
 
 ## Empaquetado
@@ -391,8 +428,8 @@ se ejecuta al final del `CMakeLists.txt`.
   XDJ-RX) y `exportLibrary.db` (CDJ-3000X, XDJ-AZ, OPUS-QUAD, OMNIS-DUO).
 - `exportExt.pdb` (My Tags / menús extendidos) todavía no se genera; ningún
   reproductor lo necesita para leer las listas.
-- La importación es síncrona; el análisis, la exportación y la conversión van
-  en hilos de trabajo con progreso y cancelación.
+- Importación, análisis, exportación y conversión trabajan en segundo plano
+  con progreso y cancelación. La API síncrona de importación se conserva para tests.
 - Las pistas cuyo archivo de audio no existe se excluyen de las bases de datos
   exportadas; se informa del número de omitidas en el resultado.
 - Una exportación a un USB lento puede tardar minutos: mientras tanto la

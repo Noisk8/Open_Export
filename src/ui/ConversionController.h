@@ -78,6 +78,7 @@ class ConversionController : public QAbstractListModel {
     void statusTextChanged();
     void countChanged();
     void outputDirectoryChanged();
+    void wavVerified(const QString& sourceHash, const QString& target, const QString& wavHash);
     void finished(int succeeded, int failed);
 
   private slots:

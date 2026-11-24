@@ -36,6 +36,9 @@ struct ExportOptions {
     // Reuses the audio and ANLZ files of an existing export when their content
     // has not changed. The databases are always rewritten.
     bool incremental = false;
+
+    // Preliminary audio and filesystem checks for the original XDJ-RX.
+    bool xdjRxProfile = false;
 };
 
 // ExportReport summarises what an export produced.
@@ -79,7 +82,8 @@ class ExportManager {
     // Builds the description of the export out of the given playlists. Every
     // track that the playlists refer to is exported, with its analysis data
     // preloaded so that write() is free of database access.
-    [[nodiscard]] ExportLibrary buildLibrary(const QList<core::Playlist>& playlists) const;
+    [[nodiscard]] ExportLibrary buildLibrary(const QList<core::Playlist>& playlists,
+                                             bool useWavForFlac = false) const;
 
     // Writes the export to the configured destination. This is the slow part
     // (audio can be gigabytes): call it from a worker thread.

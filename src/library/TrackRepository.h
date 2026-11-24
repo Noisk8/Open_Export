@@ -18,6 +18,8 @@ class TrackRepository {
     // Inserts a track and returns its new id (0 on failure).
     qint64 insertTrack(const core::Track& track);
 
+    bool removeTracks(const QList<qint64>& ids);
+
     // Updates the mutable metadata of an existing track.
     bool updateTrack(const core::Track& track);
 
@@ -35,6 +37,10 @@ class TrackRepository {
     // (or, failing that, its path) is already known.
     [[nodiscard]] bool existsByHash(const QString& hash) const;
     [[nodiscard]] bool existsByPath(const QString& path) const;
+
+    bool registerVerifiedWav(const QString& sourceHash, const QString& path, const QString& wavHash);
+    QPair<QString, QString> verifiedWav(const QString& sourceHash) const;
+    bool saveAnalysis(const core::Track& track, const QList<core::Beat>& beats, const QByteArray& peaks);
 
     // Musical analysis, stored in the auxiliary tables of schema v2.
     QList<core::Beat> beats(qint64 trackId) const;

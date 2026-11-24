@@ -11,6 +11,7 @@
 #include "audio/AudioAnalysisService.h"
 #include "export/ExportManager.h"
 #include "export/ExportValidator.h"
+#include "export/onelibrary/DeviceLibraryWriter.h"
 #include "export/devicesql/DeviceSqlReader.h"
 #include "library/AudioImportService.h"
 #include "library/DatabaseManager.h"
@@ -145,6 +146,18 @@ class TestExport : public QObject {
                 reader.rows(0).first(), 0x5e + 2 * 14);
         QVERIFY(!analyzePath.isEmpty());
         QVERIFY(QFile::exists(target + analyzePath));
+
+        auto mismatched = library;
+        mismatched.playlists[0].name = QStringLiteral("Different set");
+        QVERIFY2(device::onelibrary::DeviceLibraryWriter::write(
+                dir.filePath("different.db"), mismatched, QStringLiteral("2026-01-01"), &error),
+                qPrintable(error));
+        const QString oneLibrary = target + QStringLiteral("/PIONEER/rekordbox/exportLibrary.db");
+        QVERIFY(QFile::remove(oneLibrary));
+        QVERIFY(QFile::rename(dir.filePath("different.db"), oneLibrary));
+        issues.clear();
+        QVERIFY(!device::ExportValidator::validateExport(target, &issues));
+        QVERIFY(issues.join(' ').contains(QStringLiteral("sets distintos")));
     }
 
     void analysisReachesTheAnlzFiles() {

@@ -1,7 +1,11 @@
 #include "ui/ConversionWorker.h"
+#include "library/AudioImportService.h"
 
 #include <QCryptographicHash>
 #include <QFileInfo>
+#include <QDir>
+#include <QTemporaryFile>
+#include "core/ProcessWait.h"
 #include <QProcess>
 #include <QStandardPaths>
 
@@ -22,7 +26,7 @@ QString ffmpegExecutable() {
     return QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
 }
 
-QByteArray decodedPcm(const QString& ffmpeg, const QString& path, QString* error) {
+QByteArray decodedPcm(const QString& ffmpeg, const QString& path, QString* error, const QAtomicInteger<bool>* cancel) {
     QProcess process;
     process.start(ffmpeg,
             {QStringLiteral("-v"), QStringLiteral("error"),
@@ -32,28 +36,19 @@ QByteArray decodedPcm(const QString& ffmpeg, const QString& path, QString* error
                     QStringLiteral("-f"), QStringLiteral("f64le"),
                     QStringLiteral("-c:a"), QStringLiteral("pcm_f64le"),
                     QStringLiteral("-")});
-    if (!process.waitForFinished(180000)) {
-        if (error) {
-            *error = QStringLiteral("ffmpeg tardó demasiado al verificar el PCM");
-        }
-        process.kill();
-        return {};
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        if (error) {
-            *error = QString::fromUtf8(process.readAllStandardError()).trimmed();
-        }
-        return {};
-    }
-    return process.readAllStandardOutput();
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    qint64 bytes = 0;
+    if (!waitForProcess(process, 180000, cancel, error, [&](const QByteArray& chunk) {
+        hash.addData(chunk);
+        bytes += chunk.size();
+    }) || bytes == 0) return {};
+    return hash.result();
 }
 
 QString codecFor(int bitDepth) {
-    switch (bitDepth) {
-    case 24: return QStringLiteral("pcm_s24le");
-    case 32: return QStringLiteral("pcm_s32le");
-    default: return QStringLiteral("pcm_s16le");
-    }
+    if (bitDepth > 24) return QStringLiteral("pcm_s32le");
+    if (bitDepth > 16) return QStringLiteral("pcm_s24le");
+    return QStringLiteral("pcm_s16le");
 }
 
 QString toQString(const TagLib::String& value) {
@@ -96,6 +91,11 @@ ConversionOutcome ConversionWorker::convert(const ConversionJob& job, int row) c
         return outcome;
     }
 
+    outcome.sourceHash = library::AudioImportService::fileHash(job.source, m_cancelFlag);
+    if (outcome.sourceHash.isEmpty()) {
+        outcome.message = QStringLiteral("No se pudo verificar el FLAC de origen");
+        return outcome;
+    }
     const QByteArray sourcePath = job.source.toLocal8Bit();
     TagLib::FLAC::File flac(sourcePath.constData());
     if (!flac.isValid() || flac.audioProperties() == nullptr) {
@@ -112,6 +112,15 @@ ConversionOutcome ConversionWorker::convert(const ConversionJob& job, int row) c
     outcome.channels = channels;
     outcome.bitDepth = bitDepth > 0 ? bitDepth : 16;
 
+    // Only our own temporary file is ever passed to ffmpeg with overwrite enabled.
+    QTemporaryFile temporary(QFileInfo(job.target).absolutePath() + "/.ode-XXXXXX.wav");
+    if (!temporary.open()) {
+        outcome.message = temporary.errorString();
+        return outcome;
+    }
+    const QString workingPath = temporary.fileName();
+    temporary.close();
+
     // 1) Decode and re-encode as PCM. -map_metadata 0 copies what ffmpeg can;
     //    TagLib restores the full tag set below.
     QProcess conversion;
@@ -125,19 +134,9 @@ ConversionOutcome ConversionWorker::convert(const ConversionJob& job, int row) c
                     QStringLiteral("-c:a"), codecFor(outcome.bitDepth),
                     QStringLiteral("-ar"), QString::number(sampleRate),
                     QStringLiteral("-ac"), QString::number(channels),
-                    job.target});
-    if (!conversion.waitForFinished(300000)) {
-        outcome.message = QStringLiteral("ffmpeg tardó demasiado convirtiendo");
-        conversion.kill();
-        return outcome;
-    }
-    if (conversion.exitStatus() != QProcess::NormalExit || conversion.exitCode() != 0) {
-        outcome.message = QStringLiteral("ffmpeg: %1")
-                                  .arg(QString::fromUtf8(
-                                          conversion.readAllStandardError()).trimmed());
-        return outcome;
-    }
-    if (!QFileInfo::exists(job.target) || QFileInfo(job.target).size() == 0) {
+                    workingPath});
+    if (!waitForProcess(conversion, 300000, m_cancelFlag, &outcome.message)) return outcome;
+    if (QFileInfo(workingPath).size() == 0) {
         outcome.message = QStringLiteral("No se generó el WAV");
         return outcome;
     }
@@ -145,7 +144,7 @@ ConversionOutcome ConversionWorker::convert(const ConversionJob& job, int row) c
     // 2) Restore every tag (including custom Vorbis comment keys) and the
     //    embedded cover art in the WAV container.
     {
-        const QByteArray targetPath = job.target.toLocal8Bit();
+        const QByteArray targetPath = workingPath.toLocal8Bit();
         TagLib::RIFF::WAV::File wav(targetPath.constData());
         if (!wav.isValid()) {
             outcome.message = QStringLiteral("No se pudo abrir el WAV generado");
@@ -193,11 +192,14 @@ ConversionOutcome ConversionWorker::convert(const ConversionJob& job, int row) c
 
     // Count the tags that survived the round trip.
     {
-        const QByteArray targetPath = job.target.toLocal8Bit();
+        const QByteArray targetPath = workingPath.toLocal8Bit();
         TagLib::RIFF::WAV::File wav(targetPath.constData());
-        if (wav.isValid()) {
+        if (wav.isValid() && wav.audioProperties()) {
+            outcome.bitDepth = wav.audioProperties()->bitsPerSample();
             const TagLib::PropertyMap restored = wav.properties();
-            outcome.tagCount = static_cast<int>(restored.size());
+            for (auto tag = properties.begin(); tag != properties.end(); ++tag) {
+                if (restored.value(tag->first) == tag->second) ++outcome.tagCount;
+            }
             if (outcome.tagCount < static_cast<int>(properties.size())) {
                 outcome.message = QStringLiteral("Metadata parcial: %1 de %2 claves")
                                           .arg(outcome.tagCount)
@@ -209,20 +211,35 @@ ConversionOutcome ConversionWorker::convert(const ConversionJob& job, int row) c
     // 3) Prove the conversion is bit-exact by hashing the decoded PCM of both
     //    files. No dithering, resampling or lossy step is involved.
     QString verifyError;
-    const QByteArray originalPcm = decodedPcm(ffmpeg, job.source, &verifyError);
-    const QByteArray convertedPcm = decodedPcm(ffmpeg, job.target, &verifyError);
+    const QByteArray originalPcm = decodedPcm(ffmpeg, job.source, &verifyError, m_cancelFlag);
+    const QByteArray convertedPcm = originalPcm.isEmpty() ? QByteArray() : decodedPcm(ffmpeg, workingPath, &verifyError, m_cancelFlag);
     if (originalPcm.isEmpty() || convertedPcm.isEmpty()) {
         outcome.message = QStringLiteral("No se pudo verificar el PCM: %1")
                                   .arg(verifyError);
         return outcome;
     }
-    outcome.lossless = QCryptographicHash::hash(originalPcm, QCryptographicHash::Sha256)
-            == QCryptographicHash::hash(convertedPcm, QCryptographicHash::Sha256);
+    outcome.lossless = originalPcm == convertedPcm;
     if (!outcome.lossless) {
         outcome.message = QStringLiteral("El PCM no coincide: la conversión no es sin pérdida");
         return outcome;
     }
 
+    if (m_cancelFlag && m_cancelFlag->loadRelaxed()) {
+        outcome.message = QStringLiteral("Operación cancelada");
+        return outcome;
+    }
+    outcome.wavHash = library::AudioImportService::fileHash(workingPath, m_cancelFlag);
+    if (outcome.wavHash.isEmpty()
+            || outcome.sourceHash != library::AudioImportService::fileHash(job.source, m_cancelFlag)) {
+        outcome.message = QStringLiteral("Conversión cancelada o el archivo de origen cambió");
+        return outcome;
+    }
+    // QFile::rename refuses an existing destination, including a late collision.
+    if (!QFile::rename(workingPath, job.target)) {
+        outcome.message = QStringLiteral("No se publicó el WAV: destino ocupado o no escribible. El archivo existente se conserva.");
+        return outcome;
+    }
+    temporary.setAutoRemove(false);
     outcome.ok = true;
     if (outcome.message.isEmpty()) {
         outcome.message = QStringLiteral("Sin pérdida · %1 kHz · %2 bit · %3 canales · %4 tags")

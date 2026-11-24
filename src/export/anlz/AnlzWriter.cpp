@@ -154,8 +154,7 @@ Section makeBeatGridSection(const QList<core::Beat>& beats) {
 // The waveform sections share the same layout: a count of entries, a count of
 // the entries themselves and the data.
 QByteArray resample(const QByteArray& peaks, int columns) {
-    QByteArray out;
-    out.resize(columns);
+    QByteArray out(qMax(0, columns), char(0));
     if (peaks.isEmpty() || columns <= 0) {
         return out;
     }

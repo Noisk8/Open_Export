@@ -1,9 +1,11 @@
 #include "library/PlaylistRepository.h"
 
 #include <QSqlError>
+#include <QHash>
 #include <QSqlQuery>
 
 #include "library/DatabaseManager.h"
+#include "library/Savepoint.h"
 
 namespace opendeck {
 namespace library {
@@ -45,20 +47,13 @@ QList<core::Playlist> PlaylistRepository::allPlaylists() {
     if (!entries.exec()) {
         return playlists;
     }
-    int current = 0;
-    qint64 currentPlaylist = -1;
+    QHash<qint64, qsizetype> rows;
+    for (qsizetype i = 0; i < playlists.size(); ++i)
+        rows.insert(playlists.at(i).id, i);
     while (entries.next()) {
-        const qint64 playlistId = entries.value(0).toLongLong();
-        const qint64 trackId = entries.value(1).toLongLong();
-        if (playlistId != currentPlaylist) {
-            currentPlaylist = playlistId;
-            while (current < playlists.size() && playlists.at(current).id != playlistId) {
-                ++current;
-            }
-        }
-        if (current < playlists.size() && playlists.at(current).id == playlistId) {
-            playlists[current].trackIds.append(trackId);
-        }
+        const auto row = rows.constFind(entries.value(0).toLongLong());
+        if (row != rows.cend())
+            playlists[row.value()].trackIds.append(entries.value(1).toLongLong());
     }
     return playlists;
 }
@@ -74,6 +69,8 @@ QList<core::Playlist> PlaylistRepository::allPlaylistsWithEntries() {
 }
 
 qint64 PlaylistRepository::savePlaylist(const core::Playlist& playlist) {
+    Savepoint transaction(m_db.database());
+    if (!transaction.valid()) return 0;
     qint64 id = playlist.id;
     if (id <= 0) {
         QSqlQuery ins(m_db.database());
@@ -108,7 +105,7 @@ qint64 PlaylistRepository::savePlaylist(const core::Playlist& playlist) {
         upd.bindValue(QStringLiteral(":sort"), playlist.sortOrder);
         upd.bindValue(QStringLiteral(":folder"), playlist.isFolder ? 1 : 0);
         upd.bindValue(QStringLiteral(":id"), id);
-        if (!upd.exec()) {
+        if (!upd.exec() || upd.numRowsAffected() != 1) {
             return 0;
         }
     }
@@ -132,7 +129,7 @@ qint64 PlaylistRepository::savePlaylist(const core::Playlist& playlist) {
             return 0;
         }
     }
-    return id;
+    return transaction.commit() ? id : 0;
 }
 
 bool PlaylistRepository::addTrack(qint64 playlistId, qint64 trackId, int position) {

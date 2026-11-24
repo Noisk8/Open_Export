@@ -18,6 +18,8 @@ struct ConversionJob {
 struct ConversionOutcome {
     int row = 0;
     QString target;
+    QString sourceHash;
+    QString wavHash;
     bool ok = false;
     QString message;
     int sampleRate = 0;

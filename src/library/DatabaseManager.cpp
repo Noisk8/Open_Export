@@ -8,7 +8,7 @@ namespace opendeck {
 namespace library {
 
 namespace {
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 // Runs a list of statements one by one: the SQLite driver does not reliably
 // execute several statements in a single exec().
@@ -238,6 +238,22 @@ bool DatabaseManager::applyMigration(int version) {
         // is idempotent: a database that already has the column is untouched.
         return ensureColumn(m_db, QStringLiteral("playlists"), QStringLiteral("is_folder"),
                 QStringLiteral("INTEGER NOT NULL DEFAULT 0"));
+
+    case 4:
+        return execAll(m_db, {QStringLiteral(R"SQL(
+            CREATE TABLE IF NOT EXISTS verified_wav (
+                source_hash TEXT PRIMARY KEY NOT NULL,
+                path TEXT NOT NULL,
+                wav_hash TEXT NOT NULL
+            )
+        )SQL"), QStringLiteral(R"SQL(
+            UPDATE tracks SET analysis_status=0
+            WHERE analysis_status=2 AND (
+                NOT EXISTS (SELECT 1 FROM track_beats WHERE track_id=tracks.id)
+                OR NOT EXISTS (SELECT 1 FROM track_waveform
+                               WHERE track_id=tracks.id AND channel=0 AND length(peaks)>0)
+            )
+        )SQL")});
 
     default:
         return false;

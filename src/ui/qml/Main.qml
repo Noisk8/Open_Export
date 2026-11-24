@@ -6,12 +6,25 @@ import QtQuick.Dialogs
 ApplicationWindow {
     id: window
     visible: true
-    width: 1280
+    width: 1440
     height: 800
     minimumWidth: 1000
-    minimumHeight: 600
+    minimumHeight: 700
     title: qsTr("Open Deck Export")
     color: "#101114"
+    palette.window: "#191B20"
+    palette.windowText: "#FFFFFF"
+    palette.base: "#101114"
+    palette.text: "#FFFFFF"
+    palette.placeholderText: "#9CA3AF"
+    palette.button: "#24272E"
+    palette.buttonText: "#FFFFFF"
+    palette.highlight: "#EF4444"
+    palette.highlightedText: "#FFFFFF"
+
+    PreviewPlayer { id: preview }
+
+    header: WindowControls { targetWindow: window }
 
     readonly property color bg: "#101114"
     readonly property color panel: "#191B20"
@@ -23,12 +36,51 @@ ApplicationWindow {
     readonly property color success: "#22C55E"
     readonly property color warning: "#F59E0B"
 
+    onClosing: (event) => {
+        if (exporter.running || analysis.running || converter.running || library.importing) {
+            event.accepted = false
+            window.setStatus("Hay tareas en curso. Espera a que terminen o cancélalas antes de cerrar.", false)
+        }
+    }
+
     // Playlist that receives the tracks added with the "+" button.
     property int selectedPlaylistId: 0
     property string selectedPlaylistName: ""
+    property bool selectedIsFolder: false
+    property var exportIds: []
+    property int playlistRevision: 0
+    function refreshFolders() { playlistRevision++; }
+    function createNode(folder) {
+        const id = playlists.createPlaylist(newPlaylistName.text, folderDestination.currentValue || 0, folder)
+        if (id > 0) {
+            selectedPlaylistId = id
+            selectedPlaylistName = newPlaylistName.text.trim()
+            selectedIsFolder = folder
+            tracks.playlistId = 0
+            newPlaylistName.text = ""
+        }
+    }
+    Connections {
+        target: playlists
+        function onPlaylistsChanged() { window.refreshFolders() }
+        function onErrorChanged() { if (playlists.lastError.length) window.setStatus(playlists.lastError, false) }
+    }
+    FileDialog {
+        id: importFilesDialog
+        title: "Importar música"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["Audio (*.mp3 *.wav *.flac *.aiff *.aif *.m4a *.aac *.ogg)", "Todos los archivos (*)"]
+        onAccepted: library.importAsync(selectedFiles)
+    }
+    FolderDialog {
+        id: importFolderDialog
+        title: "Importar carpeta de música"
+        onAccepted: library.importAsync([selectedFolder])
+    }
 
     // The track table hides columns that do not fit in a narrow window.
-    readonly property bool showDetails: centralPane.width > 530
+    readonly property bool showArtist: centralPane.width > 600
+    readonly property bool showDetails: centralPane.width > 850
     readonly property int artistWidth: Math.max(96,
         Math.min(140, Math.round(centralPane.width * 0.26)))
 
@@ -49,28 +101,92 @@ ApplicationWindow {
         return m + ":" + s
     }
 
+    Timer {
+        id: missingNoticeTimer
+        interval: 6000
+        onTriggered: exportStatus.text = ""
+    }
+
     function setStatus(message, ok) {
+        missingNoticeTimer.stop()
         exportStatus.text = message
         exportStatus.color = ok ? window.success : window.accent
     }
 
-    function doExport(destination) {
-        // Close the modal popup first: the export runs in the background and
-        // a modal dialog left open would still block all interaction.
-        devicePopup.close()
-        exporter.exportTo(destination)
+    Dialog {
+        id: removeMissingDialog
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(420, window.width - 32)
+        modal: true
+        title: "Quitar pistas sin archivo"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        property var trackIds: []
+        onOpened: standardButton(Dialog.Ok).text = "Quitar pistas"
+        contentItem: Label {
+            text: "Se quitarán hasta " + removeMissingDialog.trackIds.length
+                + " pistas de la biblioteca y de sus listas, incluidos sus cues y análisis. "
+                + "Los archivos de audio se conservan. Si la música está en un disco desconectado, conéctalo primero."
+            wrapMode: Text.WordWrap
+            color: window.textPrimary
+        }
+        onAccepted: {
+            const n = library.removeMissing(trackIds)
+            window.setStatus(n < 0 ? "No se pudieron quitar las pistas"
+                : n === 0 ? "Las pistas ya están disponibles o se quitaron anteriormente"
+                : ("Pistas quitadas de la biblioteca: " + n), n >= 0)
+            missingNoticeTimer.restart()
+        }
     }
 
-    // Fase 2/7: the export dialog can analyse first and export automatically
-    // once the analysis finishes, so the user never has to guess the order.
     property string pendingExportPath: ""
     property bool waitingForAnalysis: false
-
-    function analyzeAndExport(destination) {
-        window.pendingExportPath = destination
-        window.waitingForAnalysis = true
+    property bool analyzeBeforeExport: false
+    property var exportPreview: ({})
+    function doExport(destination) {
+        openExportConfirmation(destination, false)
+    }
+    function openExportConfirmation(destination, withAnalysis) {
+        if (waitingForAnalysis || exporter.running) return
+        analyzeBeforeExport = withAnalysis === true
         devicePopup.close()
-        analysis.analyzeAll()
+        exportPreview = exporter.summary(destination)
+        pendingExportPath = exportPreview.destination
+        exportConfirm.open()
+    }
+    function analyzeAndExport(destination) {
+        openExportConfirmation(destination, true)
+    }
+    Dialog {
+        id: exportConfirm
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(600, window.width - 40)
+        modal: true
+        title: "Revisar exportación"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: standardButton(Dialog.Ok).enabled = window.exportPreview.tracks > window.exportPreview.missing
+                && (window.exportPreview.needsWav || 0) === 0
+        onRejected: window.analyzeBeforeExport = false
+        onAccepted: {
+            if (window.analyzeBeforeExport) {
+                window.waitingForAnalysis = true
+                analysis.analyzeTracks(exporter.selectedTrackIds(), exporter.useWavForFlac)
+            } else exporter.exportTo(window.pendingExportPath)
+            window.analyzeBeforeExport = false
+        }
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: "Destino: " + (window.exportPreview.destination || "")
+                + "\n" + (window.exportPreview.playlists || 0) + " listas · " + (window.exportPreview.tracks || 0) + " pistas únicas"
+                + "\nAudio: " + ((window.exportPreview.audioBytes || 0) / 1048576).toFixed(1) + " MiB (más bases, análisis y temporales)"
+                + "\nEspacio disponible: " + (window.exportPreview.availableBytes >= 0 ? (window.exportPreview.availableBytes / 1048576).toFixed(1) + " MiB" : "desconocido")
+                + ((window.exportPreview.needsWav || 0) > 0
+                    ? "\nFLAC sin WAV verificado disponible: " + window.exportPreview.needsWav
+                    : "\nArchivos ausentes que se omitirán: " + (window.exportPreview.missing || 0))
+                + "\nLa biblioteca del destino se reemplaza por esta selección. No se fusiona con otras listas del USB."
+                + (window.exportPreview.availableBytes >= 0 && window.exportPreview.audioBytes > window.exportPreview.availableBytes
+                    ? "\nEl audio supera el espacio libre; revisa el destino (una exportación incremental puede reutilizar archivos)." : "")
+        }
     }
 
     Connections {
@@ -83,11 +199,12 @@ ApplicationWindow {
 
     Connections {
         target: analysis
-        function onFinished() {
+        function onFinished(analyzed, failed) {
             if (window.waitingForAnalysis) {
                 window.waitingForAnalysis = false
-                window.setStatus("Análisis terminado, exportando…", true)
-                exporter.exportTo(window.pendingExportPath)
+                window.setStatus("Análisis terminado", true)
+                if (!analysis.cancelled && failed === 0) exporter.exportTo(window.pendingExportPath)
+                else window.setStatus("Quedan pistas sin analizar. Revisa el resultado antes de exportar.", false)
             }
         }
     }
@@ -105,7 +222,7 @@ ApplicationWindow {
         id: devicePopup
         anchors.centerIn: Overlay.overlay
         width: Math.min(560, window.width - 40)
-        height: Math.min(430, window.height - 40)
+        height: Math.min(680, window.height - 40)
         modal: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
@@ -136,6 +253,30 @@ ApplicationWindow {
                 }
             }
 
+            OdeCheckBox {
+                text: "Exportar todas las playlists"
+                checked: exporter.allPlaylists
+                onToggled: exporter.allPlaylists = checked
+            }
+            ListView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 120
+                visible: !exporter.allPlaylists
+                model: playlists
+                clip: true
+                delegate: OdeCheckBox {
+                    width: ListView.view.width
+                    text: "  ".repeat(model.depth) + (model.isFolder ? "▸ " : "♫ ") + model.name
+                    checked: window.exportIds.indexOf(model.playlistId) >= 0
+                    onToggled: {
+                        let ids = window.exportIds.slice()
+                        if (checked) ids.push(model.playlistId)
+                        else ids = ids.filter(id => id !== model.playlistId)
+                        window.exportIds = ids
+                        exporter.selectedPlaylists = ids
+                    }
+                }
+            }
             // Warn when the analysis has not been run: without it the ANLZ
             // files have no beat grid, key or waveform.
             Rectangle {
@@ -265,12 +406,25 @@ ApplicationWindow {
                 }
             }
 
-            // Fase 7: both formats and incremental export are optional.
             OdeCheckBox {
                 Layout.fillWidth: true
-                text: "Device Library Plus (exportLibrary.db para reproductores 2023+)"
-                checked: exporter.writeDeviceLibrary
+                text: "Perfil XDJ-RX original"
+                checked: exporter.xdjRxProfile
+                onToggled: exporter.xdjRxProfile = checked
+            }
+            OdeCheckBox {
+                Layout.fillWidth: true
+                text: "OneLibrary (exportLibrary.db)"
+                enabled: !exporter.xdjRxProfile
+                checked: !exporter.xdjRxProfile && exporter.writeDeviceLibrary
                 onToggled: exporter.writeDeviceLibrary = checked
+            }
+            OdeCheckBox {
+                Layout.fillWidth: true
+                text: "Exportar los FLAC como WAV verificado"
+                enabled: !exporter.xdjRxProfile
+                checked: exporter.useWavForFlac
+                onToggled: exporter.useWavForFlac = checked
             }
             OdeCheckBox {
                 Layout.fillWidth: true
@@ -302,9 +456,10 @@ ApplicationWindow {
     // Fase 3: hot cues, memory cues and loops of the selected track.
     Popup {
         id: cuePopup
+        property string audioPath: ""
         anchors.centerIn: Overlay.overlay
-        width: Math.min(640, window.width - 40)
-        height: Math.min(520, window.height - 40)
+        width: Math.min(820, window.width - 40)
+        height: Math.min(620, window.height - 40)
         modal: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         property string trackName: ""
@@ -385,6 +540,7 @@ ApplicationWindow {
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
+                        OdeButton { text: "▶"; enabled: preview.available; onClicked: preview.play(cuePopup.audioPath, model.time, cuePopup.trackName) }
                         OdeButton {
                             Layout.preferredWidth: 32
                             Layout.preferredHeight: 28
@@ -472,6 +628,23 @@ ApplicationWindow {
                     background: Rectangle { radius: 4; color: "#101114"; border.color: window.border; border.width: 1 }
                 }
             }
+            PlaybackBar { Layout.fillWidth: true; controller: preview }
+        }
+    }
+
+    footer: ColumnLayout {
+        spacing: 0
+        PlaybackBar { Layout.fillWidth: true; controller: preview }
+        ToolBar {
+            Layout.fillWidth: true
+            implicitHeight: 38
+            RowLayout {
+                anchors.fill: parent
+                OdeButton { text: "Importar archivos…"; enabled: !library.importing; onClicked: importFilesDialog.open() }
+                OdeButton { text: "Importar carpeta…"; enabled: !library.importing; onClicked: importFolderDialog.open() }
+                OdeButton { text: "Cancelar importación"; visible: library.importing; onClicked: library.cancelImport() }
+                Label { Layout.fillWidth: true; text: library.importStatus; elide: Text.ElideRight }
+            }
         }
     }
 
@@ -527,7 +700,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 34
                     text: analysis.running ? "Analizando…" : "Analizar biblioteca"
-                    enabled: !analysis.running && !exporter.running
+                    enabled: !library.importing && !analysis.running && !exporter.running
                              && analysis.pendingCount > 0 && analysis.ffmpegAvailable
                     onClicked: analysis.analyzeAll()
                 }
@@ -554,7 +727,7 @@ ApplicationWindow {
 
                 Item { Layout.fillHeight: true }
 
-                RowLayout {
+                ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 6
                     visible: library.missingCount > 0
@@ -565,16 +738,35 @@ ApplicationWindow {
                         font.pixelSize: 10
                         wrapMode: Text.WordWrap
                     }
-                    OdeButton {
-                        Layout.preferredWidth: 92
-                        Layout.preferredHeight: 26
-                        text: "Relocalizar"
-                        onClicked: {
-                            const n = library.relocateMissing()
-                            window.setStatus(n > 0
-                                ? ("Relocalizadas " + n + " pistas")
-                                : "No se encontraron los archivos; conecta el dispositivo o vuelve a importar",
-                                n > 0)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        OdeButton {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            enabled: !library.importing && !analysis.running && !exporter.running
+                            text: "Relocalizar"
+                            onClicked: {
+                                const n = library.relocateMissing()
+                                window.setStatus(n > 0
+                                    ? ("Relocalizadas " + n + " pistas")
+                                    : library.missingCount === 0 ? "Todos los archivos están disponibles"
+                                    : "No se encontraron los archivos; conecta el disco o quita las pistas ausentes",
+                                    n > 0 || library.missingCount === 0)
+                                missingNoticeTimer.restart()
+                            }
+                        }
+                        OdeButton {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            enabled: !library.importing && !analysis.running && !exporter.running
+                            text: "Quitar ausentes"
+                            onClicked: {
+                                const ids = library.missingTrackIds()
+                                if (ids.length > 0) {
+                                    removeMissingDialog.trackIds = ids
+                                    removeMissingDialog.open()
+                                }
+                            }
                         }
                     }
                 }
@@ -593,7 +785,7 @@ ApplicationWindow {
                     Layout.preferredHeight: 40
                     text: exporter.running ? "Exportando…" : "Exportar a USB…"
                     primary: true
-                    enabled: playlists.totalTrackCount > 0 && !exporter.running && !analysis.running
+                    enabled: playlists.totalTrackCount > 0 && !library.importing && !exporter.running && !analysis.running
                     onClicked: { devices.refresh(); devicePopup.open() }
                 }
 
@@ -665,10 +857,10 @@ ApplicationWindow {
                 id: dropArea
                 anchors.fill: parent
                 onDropped: (drop) => {
-                    const n = library.importFiles(drop.urls)
-                    window.setStatus(n > 0 ? ("Importadas " + n + " pistas") : "No se importó nada", n > 0)
+                    dropHighlight.visible = false
+                    if (drop.hasUrls) library.importAsync(drop.urls)
                 }
-                onEntered: (drag) => dropHighlight.visible = true
+                onEntered: (drag) => { if (!drag.hasUrls) drag.accepted = false; else dropHighlight.visible = true }
                 onExited: dropHighlight.visible = false
 
                 Rectangle {
@@ -736,24 +928,63 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     Text {
-                        text: "BIBLIOTECA"
+                        text: tracks.playlistId > 0 ? window.selectedPlaylistName : "BIBLIOTECA"
                         color: textPrimary
                         font.pixelSize: 14
                         font.bold: true
                         Layout.fillWidth: true
                     }
                     Text {
-                        text: library.trackCount + " pistas"
+                        text: tracks.count + " pistas"
                         color: textSecondary
                         font.pixelSize: 12
                     }
                 }
 
                 RowLayout {
+                    Layout.fillWidth: true
+                    OdeButton { text: "Seleccionar todo"; onClicked: tracks.selectVisible() }
+                    OdeButton { text: "Limpiar"; onClicked: tracks.clearSelection() }
+                    OdeButton {
+                        text: tracks.playlistId > 0 ? "Quitar" : "Añadir"
+                        enabled: tracks.selectedIds.length > 0 && window.selectedPlaylistId > 0 && !window.selectedIsFolder
+                        onClicked: {
+                            if (playlists.editTracks(window.selectedPlaylistId, tracks.selectedIds, tracks.playlistId > 0)) tracks.clearSelection()
+                        }
+                    }
+                    Label { text: tracks.selectedIds.length + " selec."; color: textSecondary }
+                }
+                RowLayout {
+                    Label { text: "Ordenar"; color: textSecondary }
+                    ComboBox {
+                        id: trackSort
+                        model: ["Orden del set", "Título", "Artista", "BPM", "Tono", "Duración"]
+                        onActivated: tracks.sortBy(["", "title", "artist", "bpm", "key", "duration"][currentIndex], descending.checked)
+                    }
+                    OdeCheckBox {
+                        id: descending
+                        text: "Descendente"
+                        onToggled: tracks.sortBy(["", "title", "artist", "bpm", "key", "duration"][trackSort.currentIndex], checked)
+                    }
+                }
+                TextField {
+                    Layout.fillWidth: true
+                    placeholderText: "Buscar título, artista, álbum o género"
+                    onTextChanged: tracks.search = text
+                }
+                Text {
+                    visible: tracks.count === 0
+                    text: tracks.search.length > 0 ? "No hay coincidencias." : "Lista vacía. Abre Toda la música y añade pistas con +."
+                    color: textSecondary
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
                     spacing: 0
+                    Item { Layout.preferredWidth: 96 }
                     Text { text: "#"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 36 }
                     Text { text: "Título"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; Layout.minimumWidth: 110 }
-                    Text { text: "Artista"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: window.artistWidth }
+                    Text { text: "Artista"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: window.artistWidth; visible: window.showArtist }
                     Text { text: "BPM"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 58; visible: window.showDetails }
                     Text { text: "Tono"; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 48; visible: window.showDetails }
                     Text { text: "Dur."; color: textSecondary; font.pixelSize: 12; font.bold: true; Layout.preferredWidth: 56; visible: window.showDetails }
@@ -768,20 +999,57 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
-                    model: library
+                    model: tracks
+                    footer: Rectangle {
+                        width: ListView.view.width
+                        height: tracks.playlistId > 0 && trackSort.currentIndex === 0 && !descending.checked ? 30 : 0
+                        visible: height > 0
+                        color: raised
+                        Text { anchors.centerIn: parent; text: "Soltar aquí para mover al final del set"; color: textSecondary; font.pixelSize: 11 }
+                        DropArea {
+                            anchors.fill: parent
+                            keys: ["track-order"]
+                            onDropped: (drop) => playlists.moveTrack(tracks.playlistId, drop.source.itemId, 0)
+                        }
+                    }
                     delegate: Rectangle {
                         width: ListView.view.width
                         height: 44
                         color: index % 2 === 0 ? panel : bg
                         radius: 4
+                        DropArea {
+                            anchors.fill: parent
+                            keys: ["track-order"]
+                            onDropped: (drop) => {
+                                if (tracks.playlistId > 0 && trackSort.currentIndex === 0 && !descending.checked)
+                                    playlists.moveTrack(tracks.playlistId, drop.source.itemId, model.trackId)
+                            }
+                        }
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 6
                             anchors.rightMargin: 4
                             spacing: 0
+                            DragHandle {
+                                kind: "track-order"
+                                itemId: model.trackId
+                                allowed: tracks.playlistId > 0 && trackSort.currentIndex === 0 && !descending.checked
+                                Layout.preferredWidth: 24
+                            }
+                            OdeCheckBox {
+                                Layout.preferredWidth: 32
+                                checked: tracks.selectedIds.indexOf(model.trackId) >= 0
+                                onToggled: tracks.toggleSelection(model.trackId)
+                            }
+                            OdeButton {
+                                Layout.preferredWidth: 40
+                                text: "▶"
+                                enabled: preview.available
+                                onClicked: preview.play(model.filePath, 0, model.title)
+                            }
                             Text { text: index + 1; color: textSecondary; font.pixelSize: 13; Layout.preferredWidth: 36 }
                             Text { text: model.title || "(sin título)"; color: textPrimary; font.pixelSize: 14; Layout.fillWidth: true; Layout.minimumWidth: 110; elide: Text.ElideRight }
-                            Text { text: model.artist || "—"; color: textSecondary; font.pixelSize: 13; Layout.preferredWidth: window.artistWidth; elide: Text.ElideRight }
+                            Text { text: model.artist || "—"; color: textSecondary; font.pixelSize: 13; Layout.preferredWidth: window.artistWidth; elide: Text.ElideRight; visible: window.showArtist }
                             Text { text: model.bpm > 0 ? model.bpm.toFixed(1) : "—"; color: accent; font.pixelSize: 13; Layout.preferredWidth: 58; visible: window.showDetails }
                             Text { text: model.key || "—"; color: textPrimary; font.pixelSize: 13; Layout.preferredWidth: 48; visible: window.showDetails }
                             Text { text: window.formatDuration(model.duration); color: textSecondary; font.pixelSize: 13; Layout.preferredWidth: 56; visible: window.showDetails }
@@ -797,15 +1065,16 @@ ApplicationWindow {
                             OdeButton {
                                 Layout.preferredWidth: 36
                                 Layout.preferredHeight: 30
-                                text: "+"
-                                enabled: window.selectedPlaylistId > 0
+                                text: tracks.playlistId > 0 ? "−" : "+"
+                                enabled: window.selectedPlaylistId > 0 && !window.selectedIsFolder
                                 ToolTip.visible: hovered
-                                ToolTip.text: enabled
-                                    ? "Añadir a «" + window.selectedPlaylistName + "»"
-                                    : "Selecciona primero una lista a la derecha"
+                                ToolTip.text: tracks.playlistId > 0 ? "Quitar de esta lista (conservar archivo)"
+                                    : "Añadir a «" + window.selectedPlaylistName + "»"
                                 onClicked: {
-                                    playlists.addTrack(window.selectedPlaylistId, model.trackId)
-                                    window.setStatus("Añadida a «" + window.selectedPlaylistName + "»", true)
+                                    const ok = tracks.playlistId > 0
+                                        ? playlists.removeTrack(window.selectedPlaylistId, model.trackId)
+                                        : playlists.addTrack(window.selectedPlaylistId, model.trackId)
+                                    window.setStatus(ok ? "Lista actualizada" : "No se pudo actualizar la lista", ok)
                                 }
                             }
                             OdeButton {
@@ -818,6 +1087,7 @@ ApplicationWindow {
                                     cues.setTrack(model.trackId)
                                     cues.duration = model.duration
                                     cuePopup.trackName = model.title || model.filePath
+                                    cuePopup.audioPath = model.filePath
                                     cuePopup.open()
                                 }
                             }
@@ -827,171 +1097,122 @@ ApplicationWindow {
             }
         }
 
-        // ---- Playlists -----------------------------------------------------
         Rectangle {
-            Layout.preferredWidth: Math.max(224, Math.min(286, window.width * 0.28))
+            Layout.preferredWidth: 290
             Layout.fillHeight: true
             color: panel
-
-            Rectangle {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: 1
-                color: border
-            }
-
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 14
-                spacing: 8
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text { text: "PLAYLISTS"; color: textPrimary; font.pixelSize: 13; font.bold: true; Layout.fillWidth: true }
-                    Rectangle {
-                        width: 26; height: 20; radius: 10
-                        color: raised
-                        Text {
-                            anchors.centerIn: parent
-                            text: playlists.playlistCount
-                            color: textPrimary
-                            font.pixelSize: 11
-                        }
-                    }
-                }
-
+                anchors.margins: 12
+                Text { text: "PLAYLISTS Y CARPETAS"; color: textPrimary; font.bold: true }
                 Text {
+                    text: window.selectedPlaylistId ? "Selección: " + window.selectedPlaylistName : "Crea una lista para organizar tu música"
+                    color: textSecondary
                     Layout.fillWidth: true
-                    text: playlists.playlistCount === 0
-                          ? "Todavía no hay listas. Crea una abajo."
-                          : (window.selectedPlaylistId > 0
-                             ? "Añadiendo a: «" + window.selectedPlaylistName + "»"
-                             : "Haz clic en una lista para seleccionarla.")
-                    color: window.selectedPlaylistId > 0 ? success : textSecondary
-                    font.pixelSize: 11
                     wrapMode: Text.WordWrap
                 }
-
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
-
-                // Empty state of the list.
-                Column {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    visible: playlists.playlistCount === 0
-                    spacing: 6
-                    Text {
-                        width: parent.width
-                        text: "＋"
-                        color: border
-                        font.pixelSize: 40
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-                    Text {
-                        width: parent.width
-                        text: "Las listas aparecerán aquí"
-                        color: textSecondary
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-                }
-
+                OdeButton { text: "Toda la música / añadir pistas"; Layout.fillWidth: true; onClicked: tracks.playlistId = 0 }
                 ListView {
+                    id: playlistTree
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
                     model: playlists
+                    clip: true
                     spacing: 3
-                    visible: playlists.playlistCount > 0
                     delegate: Rectangle {
                         width: ListView.view.width
-                        height: 42
-                        radius: 5
-                        color: model.playlistId === window.selectedPlaylistId ? "#3A2020"
-                             : (index % 2 === 0 ? raised : "transparent")
-                        border.color: model.playlistId === window.selectedPlaylistId
-                                      ? window.accent : "transparent"
-                        border.width: 1
+                        height: 40
+                        color: model.playlistId === window.selectedPlaylistId ? "#3A2020" : raised
+                        DropArea {
+                            anchors.fill: parent
+                            keys: ["playlist-order"]
+                            onDropped: (drop) => playlists.movePlaylist(drop.source.itemId, model.parentId, model.playlistId)
+                        }
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 8
-                            anchors.rightMargin: 8
-                            spacing: 8
-                            Rectangle {
-                                width: 9; height: 9; radius: 4
-                                color: model.isFolder ? window.accent : "#6B7280"
-                            }
-                            Text {
-                                text: model.name
-                                color: textPrimary
-                                font.pixelSize: 13
+                            anchors.leftMargin: Math.min(60, model.depth * 14)
+                            DragHandle { kind: "playlist-order"; itemId: model.playlistId }
+                            ItemDelegate {
                                 Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
-                            Rectangle {
-                                width: 24; height: 20; radius: 10
-                                color: "#101114"
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: model.trackCount
-                                    color: textSecondary
-                                    font.pixelSize: 11
+                                text: (model.isFolder ? "▾ " : "♫ ") + model.name
+                                contentItem: Text { text: parent.text; color: textPrimary; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                                onClicked: {
+                                    window.selectedPlaylistId = model.playlistId
+                                    window.selectedPlaylistName = model.name
+                                    window.selectedIsFolder = model.isFolder
+                                    tracks.playlistId = model.isFolder ? 0 : model.playlistId
                                 }
                             }
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                window.selectedPlaylistId = model.playlistId
-                                window.selectedPlaylistName = model.name
-                            }
+                            Label { text: model.isFolder ? "" : model.trackCount; color: textSecondary; rightPadding: 6 }
                         }
                     }
                 }
-
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
-
-                Text { text: "Nueva lista"; color: textSecondary; font.pixelSize: 11 }
                 RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 6
-                    TextField {
-                        id: newPlaylistName
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 36
-                        placeholderText: "Nombre de la lista"
-                        color: textPrimary
-                        background: Rectangle {
-                            radius: 5
-                            color: "#101114"
-                            border.color: parent.activeFocus ? window.accent : border
-                            border.width: 1
-                        }
-                        onAccepted: {
-                            if (text.trim().length > 0) {
-                                window.selectedPlaylistId = playlists.createPlaylist(text.trim())
-                                window.selectedPlaylistName = text.trim()
-                                text = ""
-                            }
-                        }
-                    }
-                    OdeButton {
-                        Layout.preferredWidth: 40
-                        Layout.preferredHeight: 36
-                        text: "+"
-                        primary: true
-                        onClicked: {
-                            if (newPlaylistName.text.trim().length > 0) {
-                                window.selectedPlaylistId = playlists.createPlaylist(newPlaylistName.text.trim())
-                                window.selectedPlaylistName = newPlaylistName.text.trim()
-                                newPlaylistName.text = ""
-                            }
-                        }
-                    }
+                    enabled: window.selectedPlaylistId > 0
+                    OdeButton { text: "Nombre"; onClicked: { renameField.text = window.selectedPlaylistName; renameDialog.open() } }
+                    OdeButton { text: "Mover"; onClicked: moveDialog.open() }
+                    OdeButton { text: "Eliminar"; onClicked: deleteDialog.open() }
                 }
+                Label { text: "Crear dentro de"; color: textSecondary }
+                ComboBox {
+                    id: folderDestination
+                    Layout.fillWidth: true
+                    model: { window.playlistRevision; return playlists.folders() }
+                    textRole: "name"
+                    valueRole: "id"
+                }
+                TextField { id: newPlaylistName; Layout.fillWidth: true; placeholderText: "Nombre de lista o carpeta"; onAccepted: window.createNode(false) }
+                RowLayout {
+                    OdeButton { text: "+ Lista"; onClicked: window.createNode(false) }
+                    OdeButton { text: "+ Carpeta"; onClicked: window.createNode(true) }
+                }
+                Text { text: "Arrastra ⠿ para cambiar el orden. Usa Mover para cambiar de carpeta."; color: textSecondary; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             }
+        }
+    }
+    Dialog {
+        id: moveDialog
+        title: "Mover a carpeta"
+        anchors.centerIn: Overlay.overlay
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        ComboBox {
+            id: moveDestination
+            model: { window.playlistRevision; return playlists.folders() }
+            textRole: "name"
+            valueRole: "id"
+            width: 260
+        }
+        onAccepted: playlists.movePlaylist(window.selectedPlaylistId, moveDestination.currentValue || 0)
+    }
+
+    Dialog {
+        id: renameDialog
+        anchors.centerIn: Overlay.overlay
+        title: "Renombrar lista"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        TextField { id: renameField; placeholderText: "Nombre" }
+        onAccepted: {
+            const ok = playlists.renamePlaylist(window.selectedPlaylistId, renameField.text)
+            if (ok) window.selectedPlaylistName = renameField.text.trim()
+            else window.setStatus("No se pudo renombrar la lista", false)
+        }
+    }
+    Dialog {
+        id: deleteDialog
+        anchors.centerIn: Overlay.overlay
+        title: "Eliminar «" + window.selectedPlaylistName + "»"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Label { text: "Se elimina la lista o carpeta y sus listas descendientes. Los archivos de audio se conservan." }
+        onAccepted: {
+            if (playlists.removePlaylist(window.selectedPlaylistId)) {
+                window.selectedPlaylistId = 0
+                window.selectedPlaylistName = ""
+                window.selectedIsFolder = false
+                tracks.playlistId = 0
+            } else window.setStatus("No se pudo eliminar la lista", false)
         }
     }
 

@@ -254,6 +254,8 @@ bool DeviceLibraryWriter::write(const QString& databasePath, const ExportLibrary
                 const core::Track& track = item.track;
                 const int artistId = intern(db, artists, QStringLiteral("artist"),
                         QStringLiteral("artist_id"), QStringLiteral("name"), track.artist, error);
+                const int composerId = intern(db, artists, QStringLiteral("artist"),
+                        QStringLiteral("artist_id"), QStringLiteral("name"), track.composer, error);
                 const int genreId = intern(db, genres, QStringLiteral("genre"),
                         QStringLiteral("genre_id"), QStringLiteral("name"), track.genre, error);
                 const int labelId = intern(db, labels, QStringLiteral("label"),
@@ -323,7 +325,7 @@ bool DeviceLibraryWriter::write(const QString& databasePath, const ExportLibrary
                 query.addBindValue(artistId);
                 query.addBindValue(0);                                 // remixer
                 query.addBindValue(0);                                 // original artist
-                query.addBindValue(0);                                 // composer
+                query.addBindValue(composerId);
                 query.addBindValue(0);                                 // lyricist
                 query.addBindValue(albumId);
                 query.addBindValue(genreId);

@@ -130,6 +130,9 @@ ExportManifest ExportManifest::load(const QString& exportRoot, QString* error) {
         const QJsonObject entry = value.toObject();
         manifest.tracks.insert(entry.value(QStringLiteral("path")).toString(),
                 entry.value(QStringLiteral("hash")).toString());
+        const QString audioHash = entry.value(QStringLiteral("audioHash")).toString();
+        if (audioHash.size() == 64)
+            manifest.ownedAudio.insert(entry.value(QStringLiteral("path")).toString(), audioHash);
     }
     return manifest;
 }
@@ -147,6 +150,7 @@ bool ExportManifest::save(const QString& exportRoot, QString* error) const {
         QJsonObject entry;
         entry.insert(QStringLiteral("path"), it.key());
         entry.insert(QStringLiteral("hash"), it.value());
+        if (ownedAudio.contains(it.key())) entry.insert(QStringLiteral("audioHash"), ownedAudio.value(it.key()));
         tracksArray.append(entry);
     }
     QJsonObject root;

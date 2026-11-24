@@ -53,6 +53,7 @@ add_library(ode_core STATIC
     src/export/ExportManifest.cpp
     src/export/ExportManager.cpp
     src/export/ExportValidator.cpp
+    src/ui/TrackFilterModel.h
     src/ui/LibraryController.cpp
     src/ui/PlaylistController.cpp
     src/ui/DeviceController.cpp
@@ -91,6 +92,10 @@ qt_add_qml_module(open-deck-export
     URI OpenDeckExport
     VERSION 1.0
     QML_FILES
+        src/ui/qml/PreviewPlayer.qml
+        src/ui/qml/PlaybackBar.qml
+        src/ui/qml/DragHandle.qml
+        src/ui/qml/WindowControls.qml
         src/ui/qml/Main.qml
         src/ui/qml/OdeButton.qml
         src/ui/qml/OdeCheckBox.qml

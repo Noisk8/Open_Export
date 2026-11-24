@@ -9,7 +9,10 @@
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QUuid>
+#include <QtEndian>
+#include <algorithm>
 
+#include "export/anlz/AnlzWriter.h"
 #include "export/devicesql/DeviceSqlReader.h"
 #include "export/onelibrary/SqlCipherWriter.h"
 
@@ -48,6 +51,54 @@ void addIssue(QStringList* issues, const QString& message) {
         issues->append(message);
     }
 }
+
+using Rows = QList<QStringList>;
+
+bool compareLibrary(QSqlDatabase db, const DeviceSqlReader& reader) {
+    const auto matches = [&](const QString& sql, Rows expected) {
+        QSqlQuery query(db);
+        if (!query.exec(sql)) return false;
+        Rows actual;
+        const qsizetype columns = expected.isEmpty() ? 0 : expected.first().size();
+        while (query.next()) {
+            QStringList row;
+            for (int i = 0; i < columns; ++i)
+                row.append(query.value(i).toString());
+            actual.append(row);
+        }
+        std::sort(expected.begin(), expected.end());
+        std::sort(actual.begin(), actual.end());
+        return expected == actual;
+    };
+    const auto number = [](const QByteArray& row, int offset) {
+        return QString::number(readU32(row, offset));
+    };
+    Rows tracks;
+    for (const auto& row : reader.rows(0)) {
+        tracks.append({number(row, kTrackIdOffset),
+            DeviceSqlReader::readSlotString(row, kTrackStringSlots + 2 * kTrackFilePathSlot),
+            DeviceSqlReader::readSlotString(row, kTrackStringSlots + 2 * kTrackAnalyzePathSlot)});
+    }
+    Rows playlists;
+    for (const auto& row : reader.rows(7)) {
+        playlists.append({number(row, kPlaylistIdOffset), number(row, kPlaylistParentOffset),
+            number(row, 8), number(row, kPlaylistIsFolderOffset),
+            DeviceSqlReader::readString(row, 20)});
+    }
+    Rows entries;
+    for (const auto& row : reader.rows(8)) {
+        entries.append({number(row, kEntryPlaylistIdOffset), number(row, kEntryTrackIdOffset),
+            number(row, kEntryIndexOffset)});
+    }
+    return matches(QStringLiteral("SELECT content_id, path, analysisDataFilePath FROM content"), tracks)
+            && matches(QStringLiteral("SELECT playlist_id, coalesce(playlist_id_parent,0), "
+                                      "sequenceNo, attribute, name FROM playlist"), playlists)
+            && matches(QStringLiteral("SELECT playlist_id, content_id, sequenceNo FROM playlist_content"),
+                       entries);
+}
+
+bool validateDeviceLibrary(const QString& databasePath, QStringList* issues,
+                           const DeviceSqlReader* legacy);
 
 } // namespace
 
@@ -164,55 +215,99 @@ bool ExportValidator::validateDatabase(const QByteArray& data, QStringList* issu
     return ok;
 }
 
-bool ExportValidator::validateExport(const QString& exportRoot, QStringList* issues) {
-    bool ok = true;
-
-    const QString databasePath = exportRoot + QStringLiteral("/PIONEER/rekordbox/export.pdb");
-    QFile database(databasePath);
+bool ExportValidator::validateExport(const QString& exportRoot, QStringList* issues,
+                                     const QString& mediaFallback, bool expectAudio,
+                                     bool expectAnalysis) {
+    QFile database(exportRoot + QStringLiteral("/PIONEER/rekordbox/export.pdb"));
     if (!database.open(QIODevice::ReadOnly)) {
-        addIssue(issues, QStringLiteral("No se encontró %1").arg(databasePath));
+        addIssue(issues, QStringLiteral("No se encontró %1").arg(database.fileName()));
         return false;
     }
     const QByteArray data = database.readAll();
-    database.close();
+    bool ok = validateDatabase(data, issues);
 
-    ok = validateDatabase(data, issues) && ok;
-
-    // OneLibrary is optional, but when present it must be readable.
     const QString dlpPath = exportRoot + QStringLiteral("/PIONEER/rekordbox/exportLibrary.db");
-    if (QFileInfo::exists(dlpPath)) {
-        ok = validateDeviceLibrary(dlpPath, issues) && ok;
-    }
-
-    // The analysis files of every track have to be where the database says.
     const DeviceSqlReader reader(data);
-    if (reader.isValid()) {
-        for (const QByteArray& row : reader.rows(0)) {
-            const QString analyzePath =
-                    DeviceSqlReader::readSlotString(row, kTrackStringSlots
-                                                           + 2 * kTrackAnalyzePathSlot);
-            if (analyzePath.isEmpty()) {
-                continue;
+    if (!reader.isValid()) return false;
+    if (QFileInfo::exists(dlpPath))
+        ok = opendeck::device::validateDeviceLibrary(dlpPath, issues, &reader) && ok;
+
+    const auto media = [&](const QString& path) {
+        if (path != QDir::cleanPath(path) || !path.startsWith('/')) return QString();
+        const QString staged = exportRoot + path;
+        return !mediaFallback.isEmpty() && !QFileInfo::exists(staged)
+                ? mediaFallback + path : staged;
+    };
+
+    QSet<QString> audioPaths;
+    QSet<QString> analysisPaths;
+    for (const QByteArray& row : reader.rows(0)) {
+        const QString audioPath = DeviceSqlReader::readSlotString(
+                row, kTrackStringSlots + 2 * kTrackFilePathSlot);
+        const QString key = audioPath.toCaseFolded();
+        if (expectAudio && (!audioPath.startsWith("/Contents/") || audioPaths.contains(key)
+                || !QFileInfo(media(audioPath)).isFile() || QFileInfo(media(audioPath)).size() == 0)) {
+            addIssue(issues, QStringLiteral("Audio ausente, vacío o duplicado: %1").arg(audioPath));
+            ok = false;
+        }
+        audioPaths.insert(key);
+        if (!expectAnalysis) continue;
+        const QString analyzePath = DeviceSqlReader::readSlotString(
+                row, kTrackStringSlots + 2 * kTrackAnalyzePathSlot);
+        if (analyzePath != AnlzWriter::analysisPath(audioPath) || analysisPaths.contains(analyzePath)) {
+            addIssue(issues, QStringLiteral("Ruta de análisis inválida: %1").arg(analyzePath));
+            ok = false;
+            continue;
+        }
+        analysisPaths.insert(analyzePath);
+        for (const QString& suffix : {QStringLiteral(".DAT"), QStringLiteral(".EXT"),
+                                      QStringLiteral(".2EX")}) {
+            const QString path = QFileInfo(analyzePath).path() + "/ANLZ0000" + suffix;
+            QFile file(media(path));
+            bool valid = file.open(QIODevice::ReadOnly);
+            const QByteArray header = valid ? file.read(12) : QByteArray();
+            const auto sizeAt = [](const QByteArray& bytes, int offset) {
+                return qFromBigEndian<quint32>(bytes.constData() + offset);
+            };
+            valid = header.size() == 12 && header.startsWith("PMAI")
+                    && sizeAt(header, 8) == file.size() && sizeAt(header, 4) >= 12
+                    && sizeAt(header, 4) <= file.size() && file.seek(sizeAt(header, 4));
+            bool pathMatched = false;
+            while (valid && !file.atEnd()) {
+                const auto section = file.read(12);
+                const qint64 start = file.pos() - section.size();
+                valid = section.size() == 12 && sizeAt(section, 4) >= 12
+                        && sizeAt(section, 8) >= sizeAt(section, 4)
+                        && sizeAt(section, 8) <= file.size() - start;
+                if (valid && section.startsWith("PPTH")) {
+                    QByteArray expected(2 * (audioPath.size() + 1), char(0));
+                    for (qsizetype i = 0; i < audioPath.size(); ++i)
+                        qToBigEndian<quint16>(audioPath.at(i).unicode(), expected.data() + 2 * i);
+                    const QByteArray length = file.read(4);
+                    valid = !pathMatched && length.size() == 4 && sizeAt(length, 0) == expected.size()
+                            && sizeAt(section, 8) >= 16 + expected.size()
+                            && file.read(expected.size()) == expected;
+                    pathMatched = valid;
+                }
+                if (valid) valid = file.seek(start + sizeAt(section, 8));
             }
-            const QString path = exportRoot + analyzePath;
-            if (!QFileInfo::exists(path)) {
-                addIssue(issues, QStringLiteral("Falta el fichero de análisis %1").arg(analyzePath));
-                ok = false;
-            }
-            const QString audioPath =
-                    DeviceSqlReader::readSlotString(row, kTrackStringSlots
-                                                           + 2 * kTrackFilePathSlot);
-            if (!audioPath.isEmpty() && !QFileInfo::exists(exportRoot + audioPath)) {
-                addIssue(issues, QStringLiteral("Falta el audio %1").arg(audioPath));
+            if (!valid || !pathMatched) {
+                addIssue(issues, QStringLiteral("Análisis ausente o inválido: %1").arg(path));
                 ok = false;
             }
         }
     }
-
     return ok;
 }
 
 bool ExportValidator::validateDeviceLibrary(const QString& databasePath, QStringList* issues) {
+    return opendeck::device::validateDeviceLibrary(databasePath, issues, nullptr);
+}
+
+namespace {
+
+bool validateDeviceLibrary(const QString& databasePath, QStringList* issues,
+                           const DeviceSqlReader* legacy) {
     QTemporaryDir dir;
     if (!dir.isValid()) {
         addIssue(issues, QStringLiteral("No se pudo crear un directorio temporal"));
@@ -250,9 +345,29 @@ bool ExportValidator::validateDeviceLibrary(const QString& databasePath, QString
                     ok = false;
                 }
             }
-            if (query.exec(QStringLiteral("PRAGMA integrity_check")) && query.next()
-                    && query.value(0).toString() != QStringLiteral("ok")) {
+            if (!query.exec(QStringLiteral("PRAGMA integrity_check")) || !query.next()
+                    || query.value(0).toString() != QStringLiteral("ok")) {
                 addIssue(issues, QStringLiteral("exportLibrary.db: integrity_check falló"));
+                ok = false;
+            }
+            const QStringList referenceChecks{
+                QStringLiteral("SELECT 1 FROM playlist_content pc LEFT JOIN playlist p "
+                               "ON p.playlist_id=pc.playlist_id LEFT JOIN content c "
+                               "ON c.content_id=pc.content_id WHERE p.playlist_id IS NULL "
+                               "OR c.content_id IS NULL LIMIT 1"),
+                QStringLiteral("SELECT 1 FROM cue LEFT JOIN content USING(content_id) "
+                               "WHERE content.content_id IS NULL LIMIT 1"),
+                QStringLiteral("SELECT 1 FROM playlist p LEFT JOIN playlist parent "
+                               "ON p.playlist_id_parent=parent.playlist_id "
+                               "WHERE p.playlist_id_parent > 0 AND parent.playlist_id IS NULL LIMIT 1")};
+            for (const QString& check : referenceChecks) {
+                if (!query.exec(check) || query.next()) {
+                    addIssue(issues, QStringLiteral("exportLibrary.db: referencias inválidas"));
+                    ok = false;
+                }
+            }
+            if (legacy && !compareLibrary(db, *legacy)) {
+                addIssue(issues, QStringLiteral("Device Library y OneLibrary contienen sets distintos"));
                 ok = false;
             }
             db.close();
@@ -261,6 +376,8 @@ bool ExportValidator::validateDeviceLibrary(const QString& databasePath, QString
     QSqlDatabase::removeDatabase(connection);
     return ok;
 }
+
+} // namespace
 
 } // namespace device
 } // namespace opendeck

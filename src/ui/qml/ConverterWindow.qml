@@ -18,8 +18,17 @@ ApplicationWindow {
     title: "Convertir FLAC → WAV"
     color: "#101114"
     visible: false
+    palette.window: "#191B20"
+    palette.windowText: "#FFFFFF"
+    palette.base: "#101114"
+    palette.text: "#FFFFFF"
+    palette.placeholderText: "#9CA3AF"
+    palette.button: "#24272E"
+    palette.buttonText: "#FFFFFF"
 
     // Palette shared with Main.qml.
+    header: WindowControls { targetWindow: converterWindow }
+
     readonly property color bg: "#101114"
     readonly property color panel: "#191B20"
     readonly property color raised: "#24272E"
@@ -73,7 +82,7 @@ ApplicationWindow {
     DropArea {
         id: dropArea
         anchors.fill: parent
-        onDropped: (drop) => converter.addFiles(drop.urls)
+        onDropped: (drop) => { dropHighlight.visible = false; converter.addFiles(drop.urls) }
         onEntered: (drag) => dropHighlight.visible = true
         onExited: dropHighlight.visible = false
 
@@ -115,16 +124,16 @@ ApplicationWindow {
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
-            OdeButton { text: "Añadir FLAC…"; onClicked: flacDialog.open() }
-            OdeButton { text: "Añadir carpeta…"; onClicked: folderDialog.open() }
-            OdeButton { text: "Carpeta de destino…"; onClicked: outputDialog.open() }
+            OdeButton { text: "Añadir FLAC…"; enabled: !converter.running; onClicked: flacDialog.open() }
+            OdeButton { text: "Añadir carpeta…"; enabled: !converter.running; onClicked: folderDialog.open() }
+            OdeButton { text: "Carpeta de destino…"; enabled: !converter.running; onClicked: outputDialog.open() }
             Item { Layout.fillWidth: true }
             OdeButton {
                 visible: converter.running
                 text: "Cancelar"
                 onClicked: converter.cancel()
             }
-            OdeButton { text: "Limpiar"; onClicked: converter.clear() }
+            OdeButton { text: "Limpiar"; enabled: !converter.running; onClicked: converter.clear() }
             OdeButton {
                 primary: true
                 text: "Convertir"

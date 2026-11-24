@@ -1,6 +1,7 @@
 #include "ui/ExportController.h"
 
 #include <QFileInfo>
+#include <QStorageInfo>
 #include <QThread>
 
 #include "ui/ExportWorker.h"
@@ -17,7 +18,8 @@ ExportController::~ExportController() {
     m_cancelRequested.storeRelaxed(true);
     // Never destroy a QThread that is still running.
     if (m_thread != nullptr && m_thread->isRunning()) {
-        m_thread->wait(30000);
+        m_thread->quit();
+        m_thread->wait();
     }
 }
 
@@ -45,6 +47,25 @@ void ExportController::setIncremental(bool enabled) {
     emit optionsChanged();
 }
 
+void ExportController::setUseWavForFlac(bool enabled) {
+    if (m_useWavForFlac == enabled) return;
+    m_useWavForFlac = enabled;
+    emit optionsChanged();
+}
+
+QList<qint64> ExportController::selectedTrackIds() const {
+    return m_playlists.exportTrackIds(m_selectedPlaylists, m_allPlaylists);
+}
+
+QVariantMap ExportController::summary(const QVariant& destination) const {
+    auto result = m_playlists.exportSummary(m_selectedPlaylists, m_allPlaylists, useWavForFlac());
+    const QString path = PlaylistController::localPath(destination);
+    const QStorageInfo storage(path);
+    result.insert("destination", path);
+    result.insert("availableBytes", storage.isValid() ? storage.bytesAvailable() : -1);
+    return result;
+}
+
 void ExportController::exportTo(const QVariant& destination) {
     if (m_running) {
         return;
@@ -59,7 +80,8 @@ void ExportController::exportTo(const QVariant& destination) {
     }
 
     // This is the only part that needs the database, and it is fast.
-    const device::ExportLibrary library = m_playlists.buildExportLibrary();
+    const device::ExportLibrary library = m_playlists.buildExportLibrary(
+            m_selectedPlaylists, m_allPlaylists, useWavForFlac());
     if (library.tracks.isEmpty()) {
         const QString message = QStringLiteral("No hay pistas para exportar");
         setStatus(message);
@@ -69,7 +91,8 @@ void ExportController::exportTo(const QVariant& destination) {
 
     device::ExportOptions options;
     options.destination = target.absoluteFilePath();
-    options.writeDeviceLibrary = m_writeDeviceLibrary;
+    options.writeDeviceLibrary = m_writeDeviceLibrary && !m_xdjRxProfile;
+    options.xdjRxProfile = m_xdjRxProfile;
     options.incremental = m_incremental;
 
     m_running = true;
@@ -78,6 +101,7 @@ void ExportController::exportTo(const QVariant& destination) {
     emit runningChanged();
     emit progressChanged();
 
+    delete m_thread;
     m_thread = new QThread(this);
     m_worker = new ExportWorker();
     m_worker->setLibrary(library);
@@ -90,7 +114,7 @@ void ExportController::exportTo(const QVariant& destination) {
             &ExportController::onProgress, Qt::QueuedConnection);
     connect(m_worker, &ExportWorker::finished, this,
             &ExportController::onWorkerFinished, Qt::QueuedConnection);
-    connect(m_worker, &ExportWorker::finished, m_thread, &QThread::quit);
+    connect(m_worker, &ExportWorker::finished, m_thread, &QThread::quit, Qt::DirectConnection);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
 
     setStatus(QStringLiteral("Exportando a %1…").arg(target.fileName()));
@@ -98,9 +122,7 @@ void ExportController::exportTo(const QVariant& destination) {
 }
 
 void ExportController::cancel() {
-    // Only set the flag: the worker checks it between tracks. Quitting the
-    // thread here would not stop a copy in progress and could destroy objects
-    // that still have queued signal deliveries.
+    // The writer polls between tracks and during chunked audio copies.
     m_cancelRequested.storeRelaxed(true);
     setStatus(QStringLiteral("Cancelando la exportación…"));
 }
@@ -119,7 +141,7 @@ void ExportController::onWorkerFinished(bool ok, const QString& message, bool ca
     // otherwise a second QThread would replace the still-running one.
     if (m_thread != nullptr) {
         m_thread->quit();
-        m_thread->wait(30000);
+        m_thread->wait();
     }
     m_running = false;
     m_progress = cancelled ? 0 : 100;

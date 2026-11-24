@@ -36,6 +36,7 @@ class ExportManifest {
     int version = 0;
     QString createdDate;
     QString libraryDigest;
+    QHash<QString, QString> ownedAudio; // devicePath -> SHA-256 of audio copied by this app
     QHash<QString, QString> tracks; // devicePath -> trackHash
 };
 

@@ -24,6 +24,7 @@ class LibraryController;
 // shared across threads).
 class AnalysisController : public QObject {
     Q_OBJECT
+    Q_PROPERTY(bool cancelled READ cancelled NOTIFY runningChanged)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
     Q_PROPERTY(int pendingCount READ pendingCount NOTIFY pendingCountChanged)
     Q_PROPERTY(int progress READ progress NOTIFY progressChanged)
@@ -33,6 +34,7 @@ class AnalysisController : public QObject {
     explicit AnalysisController(library::DatabaseManager& db, QObject* parent = nullptr);
     ~AnalysisController() override;
 
+    bool cancelled() const { return m_cancelRequested.loadRelaxed(); }
     [[nodiscard]] bool running() const { return m_running; }
     [[nodiscard]] int pendingCount() const { return m_pendingCount; }
     [[nodiscard]] int progress() const { return m_progress; }
@@ -41,6 +43,7 @@ class AnalysisController : public QObject {
 
     // Analyses every track that is not yet analysed.
     Q_INVOKABLE void analyzeAll();
+    Q_INVOKABLE void analyzeTracks(const QList<qint64>& ids, bool useWavForFlac = false);
     Q_INVOKABLE void cancel();
 
     // Subscribes to the library's import/reload signals so that tracks added
@@ -67,6 +70,7 @@ class AnalysisController : public QObject {
     void onWorkerFinished(int analyzed, int failed);
 
   private:
+    void startAnalysis(const QList<qint64>* ids, bool useWavForFlac);
     void updatePendingCount();
     void setStatus(const QString& text);
 
@@ -76,6 +80,8 @@ class AnalysisController : public QObject {
     QAtomicInteger<bool> m_cancelRequested{false};
     bool m_running = false;
     int m_pendingCount = 0;
+    int m_saveFailures = 0;
+    int m_unscheduled = 0;
     int m_progress = 0;
     QString m_statusText;
 };

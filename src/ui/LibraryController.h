@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QAtomicInteger>
+#include <QThread>
 #include <QList>
 #include <QUrl>
 
@@ -19,6 +21,8 @@ class LibraryController : public QAbstractListModel {
     Q_OBJECT
     // QML binds to this as a property; a Q_INVOKABLE method read without
     // parentheses evaluates to a JS function, not to the number.
+    Q_PROPERTY(bool importing READ importing NOTIFY importingChanged)
+    Q_PROPERTY(QString importStatus READ importStatus NOTIFY importingChanged)
     Q_PROPERTY(int trackCount READ trackCount NOTIFY trackCountChanged)
     Q_PROPERTY(int missingCount READ missingCount NOTIFY missingCountChanged)
   public:
@@ -38,6 +42,12 @@ class LibraryController : public QAbstractListModel {
     Q_ENUM(Roles)
 
     explicit LibraryController(library::DatabaseManager& db, QObject* parent = nullptr);
+
+    ~LibraryController() override;
+    bool importing() const { return m_importing; }
+    QString importStatus() const { return m_importStatus; }
+    Q_INVOKABLE void importAsync(const QList<QUrl>& urls);
+    Q_INVOKABLE void cancelImport();
 
     // QAbstractListModel
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -59,21 +69,28 @@ class LibraryController : public QAbstractListModel {
     // Searches the mounted volumes for the missing files and repairs the paths.
     // Returns how many tracks were found again.
     Q_INVOKABLE int relocateMissing();
+    Q_INVOKABLE QList<qint64> missingTrackIds();
+    Q_INVOKABLE int removeMissing(const QList<qint64>& ids);
 
   signals:
+    void importingChanged();
     void importProgress(int current, int total);
     void importFinished(int imported, int skipped);
     void trackCountChanged();
     void missingCountChanged();
+    void tracksRemoved();
 
   private:
     void reload();
     void collectAudioFiles(const QString& dir, QStringList& out);
-    void updateMissingCount();
 
     library::DatabaseManager& m_db;
     QList<core::Track> m_tracks;
     int m_missingCount = 0;
+    QThread* m_importThread = nullptr;
+    QAtomicInteger<bool> m_cancelImport{false};
+    bool m_importing = false;
+    QString m_importStatus;
 };
 
 } // namespace ui

@@ -16,7 +16,9 @@ class ExportValidator {
   public:
     // Validates the `export.pdb` of an export. Returns true when no problem
     // was found; the issues are appended to the list either way.
-    static bool validateExport(const QString& exportRoot, QStringList* issues);
+    static bool validateExport(const QString& exportRoot, QStringList* issues,
+                               const QString& mediaFallback = {}, bool expectAudio = true,
+                               bool expectAnalysis = true);
 
     // Validates the content of an `export.pdb`.
     static bool validateDatabase(const QByteArray& data, QStringList* issues);

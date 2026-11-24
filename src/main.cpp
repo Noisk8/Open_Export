@@ -7,12 +7,14 @@
 #include <QStandardPaths>
 
 #include "library/DatabaseManager.h"
+#include "library/TrackRepository.h"
 #include "ui/AnalysisController.h"
 #include "ui/ConversionController.h"
 #include "ui/CueController.h"
 #include "ui/DeviceController.h"
 #include "ui/ExportController.h"
 #include "ui/LibraryController.h"
+#include "ui/TrackFilterModel.h"
 #include "ui/PlaylistController.h"
 
 int main(int argc, char* argv[]) {
@@ -48,9 +50,18 @@ int main(int argc, char* argv[]) {
 
     opendeck::ui::LibraryController library(dbManager);
     opendeck::ui::PlaylistController playlists(dbManager);
+    QObject::connect(&library, &opendeck::ui::LibraryController::tracksRemoved,
+            &playlists, &opendeck::ui::PlaylistController::reload);
+    opendeck::ui::TrackFilterModel tracks(library, playlists);
     opendeck::ui::DeviceController devices;
     opendeck::ui::CueController cues(dbManager);
     opendeck::ui::ConversionController converter;
+    QObject::connect(&converter, &opendeck::ui::ConversionController::wavVerified, &library,
+            [&dbManager](const QString& sourceHash, const QString& path, const QString& wavHash) {
+                opendeck::library::TrackRepository repository(dbManager);
+                if (!repository.registerVerifiedWav(sourceHash, path, wavHash))
+                    qWarning("Could not associate a verified WAV with the library");
+            });
     opendeck::ui::AnalysisController analysis(dbManager);
     opendeck::ui::ExportController exporter(playlists);
 
@@ -68,6 +79,7 @@ int main(int argc, char* argv[]) {
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("library"), &library);
+    engine.rootContext()->setContextProperty(QStringLiteral("tracks"), &tracks);
     engine.rootContext()->setContextProperty(QStringLiteral("playlists"), &playlists);
     engine.rootContext()->setContextProperty(QStringLiteral("devices"), &devices);
     engine.rootContext()->setContextProperty(QStringLiteral("cues"), &cues);

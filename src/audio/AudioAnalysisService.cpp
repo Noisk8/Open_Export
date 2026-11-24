@@ -1,4 +1,5 @@
 #include "audio/AudioAnalysisService.h"
+#include "core/ProcessWait.h"
 
 #include <QByteArray>
 #include <QProcess>
@@ -63,7 +64,7 @@ void fft(std::vector<std::complex<float>>& data) {
 }
 
 // Decodes the file to mono 32 bit float PCM with ffmpeg.
-std::vector<float> decode(const QString& filePath, QString* error) {
+std::vector<float> decode(const QString& filePath, QString* error, const QAtomicInteger<bool>* cancel) {
     const QString program =
             QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
     if (program.isEmpty()) {
@@ -82,18 +83,9 @@ std::vector<float> decode(const QString& filePath, QString* error) {
                     QStringLiteral("-ar"), QString::number(AudioAnalysisService::kSampleRate),
                     QStringLiteral("-f"), QStringLiteral("f32le"),
                     QStringLiteral("-")});
-    if (!process.waitForFinished(180000)) {
-        *error = QStringLiteral("ffmpeg tardó demasiado o no se pudo ejecutar");
-        process.kill();
-        return {};
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        *error = QStringLiteral("ffmpeg no pudo decodificar el archivo: %1")
-                         .arg(QString::fromUtf8(process.readAllStandardError()).trimmed());
-        return {};
-    }
-
-    const QByteArray raw = process.readAllStandardOutput();
+    QByteArray raw;
+    if (!waitForProcess(process, 180000, cancel, error,
+            [&](const QByteArray& chunk) { raw.append(chunk); })) return {};
     if (raw.size() < static_cast<int>(sizeof(float)) * 1024) {
         *error = QStringLiteral("El audio decodificado es demasiado corto");
         return {};
@@ -362,10 +354,10 @@ bool AudioAnalysisService::ffmpegAvailable() {
     return !QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty();
 }
 
-AnalysisResult AudioAnalysisService::analyze(const QString& filePath) {
+AnalysisResult AudioAnalysisService::analyze(const QString& filePath, const QAtomicInteger<bool>* cancel) {
     AnalysisResult result;
     QString error;
-    const std::vector<float> samples = decode(filePath, &error);
+    const std::vector<float> samples = decode(filePath, &error, cancel);
     if (samples.empty()) {
         result.error = error;
         return result;
@@ -377,6 +369,7 @@ AnalysisResult AudioAnalysisService::analyze(const QString& filePath) {
     result.bpm = tempo.bpm;
     result.beats = buildBeatGrid(tempo, result.duration);
     result.peaks = buildWaveform(samples, result.duration);
+    if (cancel && cancel->loadRelaxed()) return result;
     result.musicalKey = detectKey(samples);
     result.ok = result.bpm > 0.0 && !result.peaks.isEmpty();
     return result;

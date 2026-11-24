@@ -18,6 +18,7 @@ namespace device {
 struct ExportTrack {
     core::Track track;
     quint32 deviceId = 0;   // id of the row in the DeviceSQL track table
+    QString verifiedWavHash; // expected file hash when exporting an associated WAV
     QString fileName;       // "track.mp3"
     QString devicePath;     // "/Contents/Artist/Album/track.mp3"
     QString analyzePath;    // "/PIONEER/USBANLZ/P0AB/0123ABCD/ANLZ0000.DAT"

@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QHash>
 #include <QFileInfo>
+#include <QSet>
 #include <QFileInfoList>
 #include <QStandardPaths>
 #include <QThread>
@@ -18,7 +19,8 @@ ConversionController::ConversionController(QObject* parent)
 ConversionController::~ConversionController() {
     m_cancelRequested.storeRelaxed(true);
     if (m_thread != nullptr && m_thread->isRunning()) {
-        m_thread->wait(30000);
+        m_thread->quit();
+        m_thread->wait();
     }
 }
 
@@ -119,16 +121,19 @@ void ConversionController::appendFile(const QString& path) {
 }
 
 void ConversionController::refreshTargets() {
+    QSet<QString> reserved;
     for (ConversionEntry& entry : m_entries) {
         const QFileInfo info(entry.source);
         const QString directory = m_outputDirectory.isEmpty()
                 ? info.absolutePath() : m_outputDirectory;
         QString target = directory + QChar('/') + info.completeBaseName()
                 + QStringLiteral(".wav");
-        if (target == entry.source) {
-            target = directory + QChar('/') + info.completeBaseName()
-                    + QStringLiteral("_converted.wav");
+        int suffix = 2;
+        while (QFileInfo::exists(target) || reserved.contains(target.toCaseFolded())) {
+            target = directory + '/' + info.completeBaseName()
+                + QStringLiteral(" (%1).wav").arg(suffix++);
         }
+        reserved.insert(target.toCaseFolded());
         entry.target = target;
     }
     if (!m_entries.isEmpty()) {
@@ -137,6 +142,7 @@ void ConversionController::refreshTargets() {
 }
 
 void ConversionController::addFiles(const QList<QUrl>& urls) {
+    if (m_running) return;
     for (const QUrl& url : urls) {
         if (!url.isLocalFile()) {
             continue;
@@ -152,6 +158,7 @@ void ConversionController::addFiles(const QList<QUrl>& urls) {
 }
 
 void ConversionController::addFolder(const QString& path) {
+    if (m_running) return;
     // FolderDialog hands over a QUrl (file:///…) which QML converts to a
     // string; turn it back into a filesystem path.
     const QString normalized = QUrl(path).isLocalFile()
@@ -185,6 +192,7 @@ void ConversionController::clear() {
 }
 
 void ConversionController::setOutputDirectory(const QString& path) {
+    if (m_running) return;
     const QString normalized = QUrl(path).isLocalFile()
             ? QUrl(path).toLocalFile() : path;
     if (m_outputDirectory == normalized) {
@@ -226,6 +234,7 @@ void ConversionController::start() {
     emit runningChanged();
     emit progressChanged();
 
+    delete m_thread;
     m_thread = new QThread(this);
     m_worker = new ConversionWorker();
     m_worker->setJobs(jobs);
@@ -244,7 +253,7 @@ void ConversionController::start() {
             }, Qt::QueuedConnection);
     connect(m_worker, &ConversionWorker::finished, this,
             &ConversionController::onWorkerFinished, Qt::QueuedConnection);
-    connect(m_worker, &ConversionWorker::finished, m_thread, &QThread::quit);
+    connect(m_worker, &ConversionWorker::finished, m_thread, &QThread::quit, Qt::DirectConnection);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
 
     setStatus(QStringLiteral("Convirtiendo %1 archivos…").arg(m_entries.size()));
@@ -281,6 +290,7 @@ void ConversionController::onItemFinished(int row, const ConversionOutcome& outc
     entry.tagCount = outcome.tagCount;
     entry.lossless = outcome.lossless;
     entry.target = outcome.target;
+    if (outcome.ok) emit wavVerified(outcome.sourceHash, outcome.target, outcome.wavHash);
     emit dataChanged(index(row), index(row));
     emit countChanged();
 }
@@ -288,13 +298,14 @@ void ConversionController::onItemFinished(int row, const ConversionOutcome& outc
 void ConversionController::onWorkerFinished(int succeeded, int failed) {
     if (m_thread != nullptr) {
         m_thread->quit();
-        m_thread->wait(30000);
+        m_thread->wait();
     }
     m_running = false;
     m_progress = 100;
     emit runningChanged();
     emit progressChanged();
-    setStatus(QStringLiteral("Convertidos %1 · Errores %2").arg(succeeded).arg(failed));
+    setStatus((m_cancelRequested.loadRelaxed() ? QStringLiteral("Cancelado · ") : QString())
+        + QStringLiteral("Convertidos %1 · Errores %2").arg(succeeded).arg(failed));
     emit finished(succeeded, failed);
 }
 

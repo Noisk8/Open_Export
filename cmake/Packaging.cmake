@@ -76,7 +76,7 @@ set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
 # may vary between distributions and releases (e.g. libssl3 vs libssl3t64,
 # libtag1v5 vs libtag1v5-vanilla, or different Qt 6 package splits). Review and
 # adjust them for the target distro before building a .deb.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6gui6, libqt6qml6, libqt6quick6, libqt6sql6, libqt6widgets6, libtag1v5, libsqlite3-0, libssl3t64, ffmpeg, qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-dialogs")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6gui6, libqt6qml6, libqt6quick6, libqt6sql6, libqt6multimedia6, libqt6widgets6, libtag1v5, libsqlite3-0, libssl3t64, ffmpeg, qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-dialogs, qml6-module-qtmultimedia")
 
 # ---- Generators -------------------------------------------------------------
 # Respect a value supplied by the caller / the command line (e.g.

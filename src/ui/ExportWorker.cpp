@@ -1,8 +1,5 @@
 #include "ui/ExportWorker.h"
 
-#include <QFileInfo>
-
-#include "export/ExportValidator.h"
 
 namespace opendeck {
 namespace ui {
@@ -32,22 +29,6 @@ void ExportWorker::run() {
         return;
     }
 
-    QStringList issues;
-    if (!device::ExportValidator::validateExport(m_options.destination, &issues)) {
-        // A full list of issues can be hundreds of lines long. Show a short
-        // summary plus the first few entries, which is what the UI can display.
-        QStringList shown = issues.mid(0, 4);
-        if (issues.size() > shown.size()) {
-            shown.append(QStringLiteral("… y %1 más").arg(issues.size() - shown.size()));
-        }
-        emit finished(false,
-                QStringLiteral("La validación encontró %1 problemas: %2")
-                        .arg(issues.size())
-                        .arg(shown.join(QStringLiteral(" · "))),
-                false);
-        return;
-    }
-
     QString message = QStringLiteral("Exportadas %1 pistas, %2 listas y %3 análisis")
                               .arg(report.trackCount)
                               .arg(report.playlistCount)
@@ -56,6 +37,7 @@ void ExportWorker::run() {
         message += QStringLiteral(" · %1 pistas omitidas (archivo de audio no encontrado)")
                            .arg(report.missingTracks);
     }
+    if (!report.warnings.isEmpty()) message += QStringLiteral(" · ") + report.warnings.first();
     emit finished(true, message, false);
 }
 
