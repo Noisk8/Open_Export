@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QStorageInfo>
 #include <QThread>
+#include <exception>
 
 #include "ui/ExportWorker.h"
 #include "ui/PlaylistController.h"
@@ -54,11 +55,54 @@ void ExportController::setUseWavForFlac(bool enabled) {
 }
 
 QList<qint64> ExportController::selectedTrackIds() const {
-    return m_playlists.exportTrackIds(m_selectedPlaylists, m_allPlaylists);
+    if (m_extensionFile.isEmpty()) return m_playlists.exportTrackIds(m_selectedPlaylists, m_allPlaylists);
+    try {
+        const auto library = m_playlists.buildExportLibrary(m_selectedPlaylists, m_allPlaylists,
+                useWavForFlac(), PlaylistController::localPath(m_extensionFile));
+        QList<qint64> ids;
+        for (const auto& track : library.tracks) ids.append(track.track.id);
+        return ids;
+    } catch (const std::exception&) {
+        return {};
+    }
 }
 
 QVariantMap ExportController::summary(const QVariant& destination) const {
     auto result = m_playlists.exportSummary(m_selectedPlaylists, m_allPlaylists, useWavForFlac());
+    if (!m_extensionFile.isEmpty()) {
+        try {
+            const auto library = m_playlists.buildExportLibrary(m_selectedPlaylists, m_allPlaylists,
+                    useWavForFlac(), PlaylistController::localPath(m_extensionFile));
+            if (!library.banks.isEmpty() && (!m_writeDeviceLibrary || m_xdjRxProfile))
+                result.insert("extensionError", QStringLiteral("Los bancos de hot cues requieren OneLibrary"));
+            qint64 bytes = 0;
+            int missing = 0;
+            int needsWav = 0;
+            for (const auto& item : library.tracks) {
+                const QFileInfo file(item.track.filePath);
+                if (!file.isFile()) {
+                    ++missing;
+                    if (item.track.filePath.isEmpty() || !item.verifiedWavHash.isEmpty()) ++needsWav;
+                } else {
+                    bytes += file.size();
+                }
+            }
+            for (const auto& bank : library.banks) {
+                for (const auto& entry : bank.entries) {
+                    if (!QFileInfo(library.tracks.at(entry.trackId - 1).track.filePath).isFile())
+                        result.insert("extensionError", QStringLiteral("Falta audio en el banco «%1»").arg(bank.name));
+                }
+            }
+            result.insert("tracks", library.tracks.size());
+            result.insert("audioBytes", bytes);
+            result.insert("missing", missing);
+            result.insert("needsWav", needsWav);
+            result.insert("tags", library.tags.size());
+            result.insert("banks", library.banks.size());
+        } catch (const std::exception& error) {
+            result.insert("extensionError", QString::fromUtf8(error.what()));
+        }
+    }
     const QString path = PlaylistController::localPath(destination);
     const QStorageInfo storage(path);
     result.insert("destination", path);
@@ -80,8 +124,16 @@ void ExportController::exportTo(const QVariant& destination) {
     }
 
     // This is the only part that needs the database, and it is fast.
-    const device::ExportLibrary library = m_playlists.buildExportLibrary(
-            m_selectedPlaylists, m_allPlaylists, useWavForFlac());
+    device::ExportLibrary library;
+    try {
+        library = m_playlists.buildExportLibrary(m_selectedPlaylists, m_allPlaylists, useWavForFlac(),
+                PlaylistController::localPath(m_extensionFile));
+    } catch (const std::exception& error) {
+        const QString message = QString::fromUtf8(error.what());
+        setStatus(message);
+        emit finished(false, message);
+        return;
+    }
     if (library.tracks.isEmpty()) {
         const QString message = QStringLiteral("No hay pistas para exportar");
         setStatus(message);

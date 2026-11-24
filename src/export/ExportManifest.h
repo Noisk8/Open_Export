@@ -33,6 +33,7 @@ class ExportManifest {
     [[nodiscard]] static QString libraryHash(const ExportLibrary& library);
 
     bool valid = false;
+    QString exportExtHash;
     int version = 0;
     QString createdDate;
     QString libraryDigest;

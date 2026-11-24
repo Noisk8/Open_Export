@@ -56,7 +56,7 @@ ApplicationWindow {
             selectedPlaylistId = id
             selectedPlaylistName = newPlaylistName.text.trim()
             selectedIsFolder = folder
-            tracks.playlistId = 0
+            tracks.playlistId = folder ? 0 : id
             newPlaylistName.text = ""
         }
     }
@@ -71,6 +71,16 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Audio (*.mp3 *.wav *.flac *.aiff *.aif *.m4a *.aac *.ogg)", "Todos los archivos (*)"]
         onAccepted: library.importAsync(selectedFiles)
+    }
+    FileDialog {
+        id: extensionDialog
+        title: "Cargar My Tags y bancos de hot cues"
+        nameFilters: ["Configuración JSON (*.json)"]
+        onAccepted: {
+            exporter.extensionFile = selectedFile.toString()
+            devicePopup.open()
+        }
+        onRejected: devicePopup.open()
     }
     FolderDialog {
         id: importFolderDialog
@@ -164,7 +174,7 @@ ApplicationWindow {
         title: "Revisar exportación"
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: standardButton(Dialog.Ok).enabled = window.exportPreview.tracks > window.exportPreview.missing
-                && (window.exportPreview.needsWav || 0) === 0
+                && (window.exportPreview.needsWav || 0) === 0 && !window.exportPreview.extensionError
         onRejected: window.analyzeBeforeExport = false
         onAccepted: {
             if (window.analyzeBeforeExport) {
@@ -183,6 +193,10 @@ ApplicationWindow {
                 + ((window.exportPreview.needsWav || 0) > 0
                     ? "\nFLAC sin WAV verificado disponible: " + window.exportPreview.needsWav
                     : "\nArchivos ausentes que se omitirán: " + (window.exportPreview.missing || 0))
+                + (window.exportPreview.extensionError ? "\n" + window.exportPreview.extensionError : "")
+                + ((window.exportPreview.tags || 0) + (window.exportPreview.banks || 0) > 0
+                    ? "\nMy Tags: " + (window.exportPreview.tags || 0)
+                        + " · Bancos: " + (window.exportPreview.banks || 0) : "")
                 + "\nLa biblioteca del destino se reemplaza por esta selección. No se fusiona con otras listas del USB."
                 + (window.exportPreview.availableBytes >= 0 && window.exportPreview.audioBytes > window.exportPreview.availableBytes
                     ? "\nEl audio supera el espacio libre; revisa el destino (una exportación incremental puede reutilizar archivos)." : "")
@@ -431,6 +445,25 @@ ApplicationWindow {
                 text: "Exportación incremental (reutilizar audio y ANLZ sin cambios)"
                 checked: exporter.incremental
                 onToggled: exporter.incremental = checked
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                OdeButton {
+                    text: exporter.extensionFile.length ? "Cambiar JSON…" : "My Tags y bancos…"
+                    onClicked: { devicePopup.close(); extensionDialog.open() }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: exporter.extensionFile.length > 0
+                    text: exporter.extensionFile.split("/").pop()
+                    elide: Text.ElideMiddle
+                }
+                OdeButton {
+                    visible: exporter.extensionFile.length > 0
+                    text: "Quitar JSON"
+                    onClicked: exporter.extensionFile = ""
+                }
             }
 
             RowLayout {
@@ -785,7 +818,7 @@ ApplicationWindow {
                     Layout.preferredHeight: 40
                     text: exporter.running ? "Exportando…" : "Exportar a USB…"
                     primary: true
-                    enabled: playlists.totalTrackCount > 0 && !library.importing && !exporter.running && !analysis.running
+                    enabled: library.trackCount > 0 && !library.importing && !exporter.running && !analysis.running
                     onClicked: { devices.refresh(); devicePopup.open() }
                 }
 
@@ -858,9 +891,19 @@ ApplicationWindow {
                 anchors.fill: parent
                 onDropped: (drop) => {
                     dropHighlight.visible = false
-                    if (drop.hasUrls) library.importAsync(drop.urls)
+                    if (drop.hasUrls && !library.importing) {
+                        library.importAsync(drop.urls, tracks.playlistId)
+                        drop.accept(Qt.CopyAction)
+                    }
                 }
-                onEntered: (drag) => { if (!drag.hasUrls) drag.accepted = false; else dropHighlight.visible = true }
+                onEntered: (drag) => {
+                    if (!drag.hasUrls || library.importing || !(drag.supportedActions & Qt.CopyAction)) {
+                        drag.accepted = false
+                        return
+                    }
+                    drag.accept(Qt.CopyAction)
+                    dropHighlight.visible = true
+                }
                 onExited: dropHighlight.visible = false
 
                 Rectangle {
@@ -903,7 +946,9 @@ ApplicationWindow {
                 }
                 Text {
                     width: parent.width
-                    text: "Suelta archivos de audio o carpetas. Después crea una lista en el panel de la derecha y añade pistas con el botón +."
+                    text: tracks.playlistId > 0
+                        ? "Suelta archivos de audio o carpetas para añadirlos a «" + window.selectedPlaylistName + "»."
+                        : "Suelta archivos de audio o carpetas para añadirlos a la biblioteca."
                     color: textSecondary
                     font.pixelSize: 13
                     wrapMode: Text.WordWrap
@@ -974,7 +1019,7 @@ ApplicationWindow {
                 }
                 Text {
                     visible: tracks.count === 0
-                    text: tracks.search.length > 0 ? "No hay coincidencias." : "Lista vacía. Abre Toda la música y añade pistas con +."
+                    text: tracks.search.length > 0 ? "No hay coincidencias." : "Lista vacía. Arrastra aquí archivos de audio o carpetas desde el gestor de archivos."
                     color: textSecondary
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
@@ -1002,7 +1047,7 @@ ApplicationWindow {
                     model: tracks
                     footer: Rectangle {
                         width: ListView.view.width
-                        height: tracks.playlistId > 0 && trackSort.currentIndex === 0 && !descending.checked ? 30 : 0
+                        height: tracks.count > 0 && tracks.playlistId > 0 && trackSort.currentIndex === 0 && !descending.checked ? 30 : 0
                         visible: height > 0
                         color: raised
                         Text { anchors.centerIn: parent; text: "Soltar aquí para mover al final del set"; color: textSecondary; font.pixelSize: 11 }

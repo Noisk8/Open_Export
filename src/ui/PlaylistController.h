@@ -75,7 +75,8 @@ class PlaylistController : public QAbstractListModel {
     // is self contained (the analysis data is already loaded), so the actual
     // write can be handed to a worker thread.
     [[nodiscard]] device::ExportLibrary buildExportLibrary(const QList<qint64>& ids = {}, bool all = true,
-                                                                  bool useWavForFlac = false) const;
+                                                                  bool useWavForFlac = false,
+                                                                  const QString& extensionFile = {}) const;
 
     // Synchronous export, kept for tests and headless callers. The UI uses
     // ExportController, which does the same work off the GUI thread.

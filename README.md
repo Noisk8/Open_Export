@@ -8,8 +8,7 @@ sin depender de rekordbox.
 biblioteca, análisis, exportación y conversión. La interfaz incluye carpetas de
 playlists, selección múltiple, importación en segundo plano, preescucha y
 exportación selectiva. El conversor protege archivos existentes y verifica PCM
-antes de publicar el WAV. La **validación en hardware real** y `exportExt.pdb`
-siguen pendientes; las fases implementadas no certifican compatibilidad física.
+antes de publicar el WAV. La **validación en hardware real** sigue pendiente.
 
 Ver [diagnóstico y soluciones](docs/revision-suite-dj.md) y
 [matriz de compatibilidad](docs/compatibility.md).
@@ -370,6 +369,36 @@ especificaciones públicas, está en
   reconéctalo y vuelve a exportar al mismo destino. Antes de preparar el
   nuevo set, la app intenta recuperar la versión anterior.
 
+### My Tags y bancos de hot cues
+
+En **Exportar a USB… → My Tags y bancos…**, carga un archivo JSON como este.
+Puedes usar solo una de las dos listas. Usa **Quitar JSON** para volver a la
+exportación estándar.
+
+```json
+{
+  "myTags": [
+    {"category": "Energía", "name": "Warm-up", "tracks": ["/home/dj/Música/a.flac"]}
+  ],
+  "hotCueBanks": [
+    {"name": "Entradas", "slots": [
+      {"slot": 1, "track": "/home/dj/Música/a.flac", "cue": 2},
+      {"slot": 4, "track": "/home/dj/Música/b.wav", "loop": 1}
+    ]}
+  ]
+}
+```
+
+- Usa las rutas absolutas de las pistas importadas. Si exportas una copia WAV,
+  escribe en el JSON la ruta del FLAC que figura en la biblioteca.
+- Las etiquetas se escriben en `exportExt.pdb` para las pistas incluidas en el USB.
+- Cada banco admite posiciones de 1 a 8. `cue` identifica un hot cue existente
+  (1 = A, 2 = B) y `loop` identifica un loop guardado según su orden en el editor.
+  Si un banco usa una pista que está fuera de las playlists elegidas, la app
+  también exporta el audio de esa pista. El banco requiere OneLibrary.
+- La lectura de My Tags y de los bancos en reproductores físicos está pendiente
+  de validación por modelo y firmware.
+
 ## Análisis musical
 
 `AudioAnalysisService` decodifica a PCM mono de 22050 Hz con `ffmpeg` y calcula:
@@ -426,8 +455,8 @@ se ejecuta al final del `CMakeLists.txt`.
   deduplicación por hash SHA-256.
 - Se escriben **los dos formatos**: `export.pdb` (CDJ-2000NXS2, CDJ-3000,
   XDJ-RX) y `exportLibrary.db` (CDJ-3000X, XDJ-AZ, OPUS-QUAD, OMNIS-DUO).
-- `exportExt.pdb` (My Tags / menús extendidos) todavía no se genera; ningún
-  reproductor lo necesita para leer las listas.
+- My Tags y bancos de hot cues se pueden incluir mediante la configuración
+  opcional de la fase 8. Los bancos se escriben en OneLibrary.
 - Importación, análisis, exportación y conversión trabajan en segundo plano
   con progreso y cancelación. La API síncrona de importación se conserva para tests.
 - Las pistas cuyo archivo de audio no existe se excluyen de las bases de datos
@@ -445,7 +474,7 @@ se ejecuta al final del `CMakeLists.txt`.
 6. ✅ Fase 6 — detección de memorias USB y validación de la exportación.
 7. ✅ Fase 7 — Device Library Plus (SQLCipher 4), exportación incremental,
    empaquetado TGZ/DEB y conversor FLAC → WAV sin pérdida.
-8. ⏳ Fase 8 — `exportExt.pdb`, hot cue banks y **pruebas en hardware real**.
+8. 🧪 Fase 8 — My Tags en `exportExt.pdb` y bancos en OneLibrary. Pruebas físicas pendientes.
 
 ## Licencia
 

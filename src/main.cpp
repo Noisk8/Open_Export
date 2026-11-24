@@ -52,6 +52,10 @@ int main(int argc, char* argv[]) {
     opendeck::ui::PlaylistController playlists(dbManager);
     QObject::connect(&library, &opendeck::ui::LibraryController::tracksRemoved,
             &playlists, &opendeck::ui::PlaylistController::reload);
+    QObject::connect(&library, &opendeck::ui::LibraryController::playlistTracksImported,
+            &playlists, [&playlists](qint64 playlistId, const QList<qint64>& ids) {
+                playlists.editTracks(playlistId, ids, false);
+            });
     opendeck::ui::TrackFilterModel tracks(library, playlists);
     opendeck::ui::DeviceController devices;
     opendeck::ui::CueController cues(dbManager);

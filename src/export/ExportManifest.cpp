@@ -122,6 +122,7 @@ ExportManifest ExportManifest::load(const QString& exportRoot, QString* error) {
         return manifest;
     }
     manifest.valid = true;
+    manifest.exportExtHash = root.value(QStringLiteral("exportExtHash")).toString();
     manifest.version = kVersion;
     manifest.createdDate = root.value(QStringLiteral("created")).toString();
     manifest.libraryDigest = root.value(QStringLiteral("playlists")).toString();
@@ -154,6 +155,7 @@ bool ExportManifest::save(const QString& exportRoot, QString* error) const {
         tracksArray.append(entry);
     }
     QJsonObject root;
+    if (!exportExtHash.isEmpty()) root.insert(QStringLiteral("exportExtHash"), exportExtHash);
     root.insert(QStringLiteral("generator"), QStringLiteral("open-deck-export"));
     root.insert(QStringLiteral("version"), kVersion);
     root.insert(QStringLiteral("created"), createdDate);

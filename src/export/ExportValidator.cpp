@@ -366,6 +366,21 @@ bool validateDeviceLibrary(const QString& databasePath, QStringList* issues,
                     ok = false;
                 }
             }
+            if (db.tables().contains(QStringLiteral("hotCueBankList_cue"))) {
+                if (!query.exec(QStringLiteral(
+                        "SELECT 1 FROM hotCueBankList_cue e "
+                        "LEFT JOIN hotCueBankList b USING(hotCueBankList_id) "
+                        "LEFT JOIN cue c USING(cue_id) "
+                        "WHERE b.hotCueBankList_id IS NULL OR c.cue_id IS NULL "
+                        "OR e.sequenceNo NOT BETWEEN 1 AND 8 "
+                        "OR c.kind NOT IN (1, 3) "
+                        "UNION ALL SELECT 1 FROM hotCueBankList_cue "
+                        "GROUP BY hotCueBankList_id, sequenceNo HAVING count(*) > 1 LIMIT 1"))
+                        || query.next()) {
+                    addIssue(issues, QStringLiteral("OneLibrary: referencias inválidas en los bancos"));
+                    ok = false;
+                }
+            }
             if (legacy && !compareLibrary(db, *legacy)) {
                 addIssue(issues, QStringLiteral("Device Library y OneLibrary contienen sets distintos"));
                 ok = false;

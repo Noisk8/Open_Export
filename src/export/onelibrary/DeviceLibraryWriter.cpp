@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
@@ -249,6 +250,7 @@ bool DeviceLibraryWriter::write(const QString& databasePath, const ExportLibrary
 
             QHash<QString, int> artists, albums, genres, labels, keys, colors;
             QHash<quint32, QString> images;
+            QHash<quint32, QList<qint64>> cueIds;
 
             for (const ExportTrack& item : library.tracks) {
                 const core::Track& track = item.track;
@@ -379,7 +381,9 @@ bool DeviceLibraryWriter::write(const QString& databasePath, const ExportLibrary
                             in150FramePerSec, out150FramePerSec)
                         VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
                     )SQL"));
-                    cueQuery.addBindValue(static_cast<int>(item.deviceId) * 1000 + cueId);
+                    const qint64 exportedId = static_cast<qint64>(item.deviceId) * 1000 + cueId;
+                    if (!library.banks.isEmpty()) cueIds[item.deviceId].append(exportedId);
+                    cueQuery.addBindValue(exportedId);
                     cueQuery.addBindValue(item.deviceId);
                     cueQuery.addBindValue(static_cast<int>(cue.kind) + 1);
                     cueQuery.addBindValue(cue.colorId);
@@ -442,6 +446,36 @@ bool DeviceLibraryWriter::write(const QString& databasePath, const ExportLibrary
                     entry.addBindValue(playlist.trackIds.at(i));
                     entry.addBindValue(i + 1);
                     insert(entry, ok, error, QStringLiteral("playlist_content"));
+                }
+            }
+
+            for (qsizetype i = 0; ok && i < library.banks.size(); ++i) {
+                const auto& bank = library.banks.at(i);
+                QSqlQuery query(db);
+                query.prepare(QStringLiteral(
+                        "INSERT INTO hotCueBankList VALUES (?, ?, ?, 0, 0, NULL)"));
+                query.addBindValue(i + 1);
+                query.addBindValue(i + 1);
+                query.addBindValue(bank.name);
+                insert(query, ok, error, QStringLiteral("hotCueBankList"));
+                QSet<int> positions;
+                for (const auto& entry : bank.entries) {
+                    if (!ok) break;
+                    const auto cues = cueIds.constFind(entry.trackId);
+                    if (entry.position < 1 || entry.position > 8 || positions.contains(entry.position)
+                            || cues == cueIds.cend() || entry.cueIndex < 0
+                            || entry.cueIndex >= cues->size()) {
+                        if (error) *error = QStringLiteral("Referencia inválida en el banco «%1»").arg(bank.name);
+                        ok = false;
+                        break;
+                    }
+                    positions.insert(entry.position);
+                    QSqlQuery slot(db);
+                    slot.prepare(QStringLiteral("INSERT INTO hotCueBankList_cue VALUES (?, ?, ?)"));
+                    slot.addBindValue(i + 1);
+                    slot.addBindValue(cues->at(entry.cueIndex));
+                    slot.addBindValue(entry.position);
+                    insert(slot, ok, error, QStringLiteral("hotCueBankList_cue"));
                 }
             }
 

@@ -38,6 +38,9 @@ class TrackRepository {
     [[nodiscard]] bool existsByHash(const QString& hash) const;
     [[nodiscard]] bool existsByPath(const QString& path) const;
 
+    [[nodiscard]] qint64 idByHash(const QString& hash) const;
+    [[nodiscard]] qint64 idByPath(const QString& path) const;
+
     bool registerVerifiedWav(const QString& sourceHash, const QString& path, const QString& wavHash);
     QPair<QString, QString> verifiedWav(const QString& sourceHash) const;
     bool saveAnalysis(const core::Track& track, const QList<core::Beat>& beats, const QByteArray& peaks);

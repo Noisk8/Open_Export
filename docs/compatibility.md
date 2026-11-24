@@ -45,7 +45,8 @@ Estados posibles:
 | Conversión FLAC → WAV sin pérdida | `STRUCTURALLY_VALIDATED` |
 | Empaquetado TGZ / DEB | `STRUCTURALLY_VALIDATED` |
 | `exportLibrary.db` (OneLibrary / Device Library Plus) | `STRUCTURALLY_VALIDATED` (abierto con SQLCipher 4.13 real) |
-| `exportExt.pdb` (My Tags) | `NOT_IMPLEMENTED` |
+| `exportExt.pdb` (My Tags) | `EXPERIMENTAL` (opcional por JSON) |
+| Bancos de hot cues en OneLibrary | `EXPERIMENTAL` (opcional por JSON) |
 
 > `STRUCTURALLY_VALIDATED` significa que un lector independiente —`DeviceSqlReader`,
 > escrito aparte del escritor, y la suite de pruebas— reconstruye lo que se
